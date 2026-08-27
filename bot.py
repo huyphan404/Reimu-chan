@@ -67,7 +67,12 @@ async def on_message(message):
         return
 
     if client.user.mentioned_in(message):
+        # Lọc bỏ tag bot
         user_text = re.sub(r'<@!?{}>'.format(client.user.id), '', message.content).strip()
+        
+        # Tự động chèn câu mặc định nếu người dùng chỉ tag mà không gõ chữ
+        if not user_text:
+            user_text = "Ngươi vừa gọi ta đấy à?"
         
         async with message.channel.typing():
             try:
@@ -90,7 +95,6 @@ async def on_message(message):
                     await message.channel.send(gif_url)
             except Exception as e:
                 print(f"Lỗi chi tiết: {e}")
-                # Dòng dưới đây đã được sửa để ép bot báo thẳng mã lỗi ra Discord
                 await message.reply(f"Đang bận quét lá ở đền rồi! Mã lỗi: `{e}`")
 
 # Chạy web server ngầm rồi bật bot Discord
