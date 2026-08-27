@@ -2,11 +2,10 @@ import os
 import re
 import requests
 import discord
-import google.generativeai as genai
 from flask import Flask
 from threading import Thread
 
-# --- PHẦN 1: WEBSERVER GIỮ BOT LUÔN ONLINE ---
+# --- PHẦN 1: WEBSERVER GIỮ BOT ONLINE ---
 app = Flask('')
 
 @app.route('/')
@@ -21,16 +20,10 @@ def keep_alive():
     t = Thread(target=run)
     t.start()
 
-# --- PHẦN 2: CẤU HÌNH BOT & GEMINI ---
+# --- PHẦN 2: CẤU HÌNH BOT & TRUY VẤN GEMINI API TRỰC TIẾP ---
 DISCORD_TOKEN = os.environ.get('DISCORD_TOKEN')
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
 
-genai.configure(api_key=GEMINI_API_KEY)
-
-# DÙNG BẢN PRO ỔN ĐỊNH NHẤT ĐỂ NÉ HOÀN TOÀN LỖI 404
-model = genai.GenerativeModel(model_name="gemini-pro")
-
-# Gom tính cách vào một biến text để truyền trực tiếp, chống lỗi API cũ
 SYSTEM_INSTRUCTION = (
     "Bạn là Hakurei Reimu từ Touhou Project. Tính cách: Miko của đền Hakurei, "
     "nghèo, lười biếng, hay càu nhàu nhưng rất mạnh mẽ và tốt bụng. "
@@ -39,9 +32,37 @@ SYSTEM_INSTRUCTION = (
     "và đặt ở cuối câu: [GIF: bite], [GIF: blush], [GIF: bored], [GIF: cry], [GIF: dance], "
     "[GIF: facepalm], [GIF: happy], [GIF: laugh], [GIF: pat], [GIF: pout], [GIF: punch], "
     "[GIF: slap], [GIF: sleep], [GIF: smile], [GIF: think], [GIF: wave], [GIF: wink]. "
-    "Ví dụ: 'Lại hết tiền rồi, chán quá đi... [GIF: bored]'\n\n"
-    "Bây giờ, hãy trả lời câu hỏi sau của người dùng:\n"
+    "Ví dụ: 'Lại hết tiền rồi, chán quá đi... [GIF: bored]'"
 )
+
+def call_gemini_api(prompt_text):
+    # Thử lần lượt các mô hình chuẩn của Google qua HTTP REST
+    models = ["gemini-1.5-flash", "gemini-2.0-flash", "gemini-1.5-pro"]
+    last_err = "Không thể kết nối API"
+
+    for model in models:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_API_KEY}"
+        payload = {
+            "system_instruction": {
+                "parts": [{"text": SYSTEM_INSTRUCTION}]
+            },
+            "contents": [
+                {
+                    "parts": [{"text": prompt_text}]
+                }
+            ]
+        }
+        try:
+            res = requests.post(url, json=payload, timeout=12)
+            data = res.json()
+            if res.status_code == 200:
+                return data['candidates'][0]['content']['parts'][0]['text']
+            else:
+                last_err = data.get('error', {}).get('message', res.text)
+        except Exception as e:
+            last_err = str(e)
+            
+    raise Exception(last_err)
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -67,17 +88,12 @@ async def on_message(message):
     if client.user.mentioned_in(message):
         user_text = re.sub(r'<@!?{}>'.format(client.user.id), '', message.content).strip()
         
-        # Xử lý chuỗi rỗng khi chỉ tag trơn
         if not user_text:
             user_text = "Ngươi vừa gọi ta đấy à?"
         
         async with message.channel.typing():
             try:
-                # Trộn tính cách Miko và câu hỏi của bạn làm một để ném cho AI
-                final_prompt = f"{SYSTEM_INSTRUCTION} {user_text}"
-                
-                response = model.generate_content(final_prompt)
-                bot_reply = response.text
+                bot_reply = call_gemini_api(user_text)
                 
                 gif_url = None
                 match = re.search(r'\[GIF:(.*?)\]', bot_reply)
