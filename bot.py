@@ -37,7 +37,12 @@ model = genai.GenerativeModel(
         "[GIF: facepalm], [GIF: happy], [GIF: laugh], [GIF: pat], [GIF: pout], [GIF: punch], "
         "[GIF: slap], [GIF: sleep], [GIF: smile], [GIF: think], [GIF: wave], [GIF: wink]. "
         "Ví dụ: 'Lại hết tiền rồi, chán quá đi... [GIF: bored]'"
-    )
+    ),
+    generation_config={
+        "temperature": 0.85,
+        "top_p": 0.95,
+        "top_k": 40,
+    }
 )
 
 intents = discord.Intents.default()
@@ -68,7 +73,6 @@ async def on_message(message):
             try:
                 response = model.generate_content(user_text)
                 
-                # Bọc an toàn để tránh việc response.text bị lỗi do safety filter
                 try:
                     bot_reply = response.text
                 except Exception:
