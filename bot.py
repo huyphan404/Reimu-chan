@@ -27,14 +27,10 @@ GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
 
 genai.configure(api_key=GEMINI_API_KEY)
 
-# Danh sách model dự phòng (chạy cái này lỗi sẽ tự nhảy sang cái khác, tránh lỗi 404)
-MODEL_CANDIDATES = [
-    "gemini-1.5-flash-latest",
-    "gemini-2.0-flash",
-    "gemini-1.5-flash-001",
-    "gemini-1.5-flash"
-]
+# DÙNG BẢN PRO ỔN ĐỊNH NHẤT ĐỂ NÉ HOÀN TOÀN LỖI 404
+model = genai.GenerativeModel(model_name="gemini-pro")
 
+# Gom tính cách vào một biến text để truyền trực tiếp, chống lỗi API cũ
 SYSTEM_INSTRUCTION = (
     "Bạn là Hakurei Reimu từ Touhou Project. Tính cách: Miko của đền Hakurei, "
     "nghèo, lười biếng, hay càu nhàu nhưng rất mạnh mẽ và tốt bụng. "
@@ -43,30 +39,9 @@ SYSTEM_INSTRUCTION = (
     "và đặt ở cuối câu: [GIF: bite], [GIF: blush], [GIF: bored], [GIF: cry], [GIF: dance], "
     "[GIF: facepalm], [GIF: happy], [GIF: laugh], [GIF: pat], [GIF: pout], [GIF: punch], "
     "[GIF: slap], [GIF: sleep], [GIF: smile], [GIF: think], [GIF: wave], [GIF: wink]. "
-    "Ví dụ: 'Lại hết tiền rồi, chán quá đi... [GIF: bored]'"
+    "Ví dụ: 'Lại hết tiền rồi, chán quá đi... [GIF: bored]'\n\n"
+    "Bây giờ, hãy trả lời câu hỏi sau của người dùng:\n"
 )
-
-GENERATION_CONFIG = {
-    "temperature": 0.85,
-    "top_p": 0.95,
-    "top_k": 40,
-}
-
-def generate_reply(prompt_text):
-    last_error = None
-    for model_name in MODEL_CANDIDATES:
-        try:
-            model = genai.GenerativeModel(
-                model_name=model_name,
-                system_instruction=SYSTEM_INSTRUCTION,
-                generation_config=GENERATION_CONFIG
-            )
-            res = model.generate_content(prompt_text)
-            return res.text
-        except Exception as e:
-            last_error = e
-            continue
-    raise last_error
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -98,7 +73,11 @@ async def on_message(message):
         
         async with message.channel.typing():
             try:
-                bot_reply = generate_reply(user_text)
+                # Trộn tính cách Miko và câu hỏi của bạn làm một để ném cho AI
+                final_prompt = f"{SYSTEM_INSTRUCTION} {user_text}"
+                
+                response = model.generate_content(final_prompt)
+                bot_reply = response.text
                 
                 gif_url = None
                 match = re.search(r'\[GIF:(.*?)\]', bot_reply)
