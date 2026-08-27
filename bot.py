@@ -21,8 +21,8 @@ def keep_alive():
     t.start()
 
 # --- PHẦN 2: CẤU HÌNH BOT NHƯ CŨ ---
-DISCORD_TOKEN = 'YOUR_DISCORD_TOKEN'
-GEMINI_API_KEY = 'YOUR_GEMINI_API_KEY'
+DISCORD_TOKEN = os.environ.get('DISCORD_TOKEN')
+GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
 
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel(
