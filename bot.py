@@ -14,13 +14,15 @@ def home():
     return "Miko Reimu đang trực đền, đừng phiền!"
 
 def run():
-    app.run(host='0.0.0.0', port=8080)
+    # Sửa lại để nhận cổng PORT động từ Render
+    port = int(os.environ.get('PORT', 8080))
+    app.run(host='0.0.0.0', port=port)
 
 def keep_alive():
     t = Thread(target=run)
     t.start()
 
-# --- PHẦN 2: CẤU HÌNH BOT NHƯ CŨ ---
+# --- PHẦN 2: CẤU HÌNH BOT ---
 DISCORD_TOKEN = os.environ.get('DISCORD_TOKEN')
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
 
@@ -62,7 +64,8 @@ async def on_message(message):
         return
 
     if client.user.mentioned_in(message):
-        user_text = message.content.replace(f'<@{client.user.id}>', '').strip()
+        # Sửa lỗi regex để lọc sạch cả dạng có dấu chấm than (<@!ID>) và không có (<@ID>)
+        user_text = re.sub(r'<@!?{}>'.format(client.user.id), '', message.content).strip()
         
         async with message.channel.typing():
             try:
@@ -81,6 +84,10 @@ async def on_message(message):
             except Exception as e:
                 await message.reply("Đang bận quét lá ở đền rồi! (Lỗi hệ thống)")
                 print(e)
+
+# Chạy web server ngầm rồi bật bot Discord
+keep_alive()
+client.run(DISCORD_TOKEN)
 
 # Chạy web server ngầm rồi bật bot Discord
 keep_alive()
