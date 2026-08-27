@@ -14,7 +14,6 @@ def home():
     return "Miko Reimu đang trực đền, đừng phiền!"
 
 def run():
-    # Sửa lại để nhận cổng PORT động từ Render
     port = int(os.environ.get('PORT', 8080))
     app.run(host='0.0.0.0', port=port)
 
@@ -40,7 +39,6 @@ model = genai.GenerativeModel(
         "Ví dụ: 'Lại hết tiền rồi, chán quá đi... [GIF: bored]'"
     )
 )
-chat_session = model.start_chat(history=[])
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -64,12 +62,19 @@ async def on_message(message):
         return
 
     if client.user.mentioned_in(message):
-        # Sửa lỗi regex để lọc sạch cả dạng có dấu chấm than (<@!ID>) và không có (<@ID>)
+        # Lọc sạch thẻ tag của bot
         user_text = re.sub(r'<@!?{}>'.format(client.user.id), '', message.content).strip()
         
         async with message.channel.typing():
             try:
-                bot_reply = chat_session.send_message(user_text).text
+                # Dùng generate_content thay cho chat_session để tránh bị dồn lịch sử gây lặp câu
+                response = model.generate_content(user_text)
+                
+                # Kiểm tra an toàn phòng trường hợp Gemini bị trống phản hồi
+                if not response.candidates or not response.candidates[0].content.parts:
+                    bot_reply = "Hừm, câu hỏi kiểu gì mà ta chẳng hiểu nổi... [GIF: facepalm]"
+                else:
+                    bot_reply = response.text
                 
                 gif_url = None
                 match = re.search(r'\[GIF:(.*?)\]', bot_reply)
@@ -85,10 +90,6 @@ async def on_message(message):
                 await message.reply("Đang bận quét lá ở đền rồi! (Lỗi hệ thống)")
                 print(e)
 
-# Chạy web server ngầm rồi bật bot Discord
-keep_alive()
-client.run(DISCORD_TOKEN)
-
-# Chạy web server ngầm rồi bật bot Discord
+# Chạy web server ngầm rồi bật bot Discord (Chỉ giữ lại duy nhất 1 bộ ở đây)
 keep_alive()
 client.run(DISCORD_TOKEN)
