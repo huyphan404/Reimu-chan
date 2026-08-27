@@ -90,7 +90,8 @@ async def on_message(message):
                     await message.channel.send(gif_url)
             except Exception as e:
                 print(f"Lỗi chi tiết: {e}")
-                await message.reply("Đang bận quét lá ở đền rồi! (Lỗi hệ thống)")
+                # Dòng dưới đây đã được sửa để ép bot báo thẳng mã lỗi ra Discord
+                await message.reply(f"Đang bận quét lá ở đền rồi! Mã lỗi: `{e}`")
 
 # Chạy web server ngầm rồi bật bot Discord
 keep_alive()
