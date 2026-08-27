@@ -62,19 +62,17 @@ async def on_message(message):
         return
 
     if client.user.mentioned_in(message):
-        # Lọc sạch thẻ tag của bot
         user_text = re.sub(r'<@!?{}>'.format(client.user.id), '', message.content).strip()
         
         async with message.channel.typing():
             try:
-                # Dùng generate_content thay cho chat_session để tránh bị dồn lịch sử gây lặp câu
                 response = model.generate_content(user_text)
                 
-                # Kiểm tra an toàn phòng trường hợp Gemini bị trống phản hồi
-                if not response.candidates or not response.candidates[0].content.parts:
-                    bot_reply = "Hừm, câu hỏi kiểu gì mà ta chẳng hiểu nổi... [GIF: facepalm]"
-                else:
+                # Bọc an toàn để tránh việc response.text bị lỗi do safety filter
+                try:
                     bot_reply = response.text
+                except Exception:
+                    bot_reply = "Hừm, câu hỏi kiểu gì mà ta chẳng hiểu nổi... [GIF: facepalm]"
                 
                 gif_url = None
                 match = re.search(r'\[GIF:(.*?)\]', bot_reply)
@@ -87,9 +85,9 @@ async def on_message(message):
                 if gif_url:
                     await message.channel.send(gif_url)
             except Exception as e:
+                print(f"Lỗi chi tiết: {e}")
                 await message.reply("Đang bận quét lá ở đền rồi! (Lỗi hệ thống)")
-                print(e)
 
-# Chạy web server ngầm rồi bật bot Discord (Chỉ giữ lại duy nhất 1 bộ ở đây)
+# Chạy web server ngầm rồi bật bot Discord
 keep_alive()
 client.run(DISCORD_TOKEN)
