@@ -27,7 +27,8 @@ GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
 
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel(
-    model_name="gemini-1.5-flash",
+  model = genai.GenerativeModel(
+    model_name="gemini-1.5-flash-latest",
     system_instruction=(
         "Bạn là Hakurei Reimu từ Touhou Project. Tính cách: Miko của đền Hakurei, "
         "nghèo, lười biếng, hay càu nhàu nhưng rất mạnh mẽ và tốt bụng. "
