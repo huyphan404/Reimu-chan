@@ -5,12 +5,12 @@ import discord
 from flask import Flask
 from threading import Thread
 
-# --- PHẦN 1: WEBSERVER GIỮ BOT ONLINE ---
+# --- WEBSERVER GIỮ BOT ONLINE ---
 app = Flask('')
 
 @app.route('/')
 def home():
-    return "Miko Reimu đang trực đền, đừng phiền!"
+    return "Miko Reimu đang trực đền!"
 
 def run():
     port = int(os.environ.get('PORT', 8080))
@@ -20,7 +20,7 @@ def keep_alive():
     t = Thread(target=run)
     t.start()
 
-# --- PHẦN 2: CẤU HÌNH BOT & TRUY VẤN GEMINI API TRỰC TIẾP ---
+# --- CẤU HÌNH BOT & TRUY VẤN GEMINI V1 ---
 DISCORD_TOKEN = os.environ.get('DISCORD_TOKEN')
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
 
@@ -31,38 +31,31 @@ SYSTEM_INSTRUCTION = (
     "LUẬT BẮT BUỘC: Khi thực hiện hành động hoặc biểu cảm, hãy chọn đúng 1 trong các từ tiếng Anh sau "
     "và đặt ở cuối câu: [GIF: bite], [GIF: blush], [GIF: bored], [GIF: cry], [GIF: dance], "
     "[GIF: facepalm], [GIF: happy], [GIF: laugh], [GIF: pat], [GIF: pout], [GIF: punch], "
-    "[GIF: slap], [GIF: sleep], [GIF: smile], [GIF: think], [GIF: wave], [GIF: wink]. "
-    "Ví dụ: 'Lại hết tiền rồi, chán quá đi... [GIF: bored]'"
+    "[GIF: slap], [GIF: sleep], [GIF: smile], [GIF: think], [GIF: wave], [GIF: wink]."
 )
 
 def call_gemini_api(prompt_text):
-    # Thử lần lượt các mô hình chuẩn của Google qua HTTP REST
-    models = ["gemini-1.5-flash", "gemini-2.0-flash", "gemini-1.5-pro"]
-    last_err = "Không thể kết nối API"
-
-    for model in models:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_API_KEY}"
-        payload = {
-            "system_instruction": {
-                "parts": [{"text": SYSTEM_INSTRUCTION}]
-            },
-            "contents": [
-                {
-                    "parts": [{"text": prompt_text}]
-                }
-            ]
-        }
-        try:
-            res = requests.post(url, json=payload, timeout=12)
-            data = res.json()
-            if res.status_code == 200:
-                return data['candidates'][0]['content']['parts'][0]['text']
-            else:
-                last_err = data.get('error', {}).get('message', res.text)
-        except Exception as e:
-            last_err = str(e)
-            
-    raise Exception(last_err)
+    # Dùng v1 thay vì v1beta để né hoàn toàn lỗi model 404
+    url = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+    
+    payload = {
+        "contents": [
+            {
+                "parts": [
+                    {"text": f"{SYSTEM_INSTRUCTION}\n\nNgười dùng nói: {prompt_text}"}
+                ]
+            }
+        ]
+    }
+    
+    res = requests.post(url, json=payload, timeout=15)
+    data = res.json()
+    
+    if res.status_code == 200:
+        return data['candidates'][0]['content']['parts'][0]['text']
+    else:
+        err_msg = data.get('error', {}).get('message', 'Lỗi kết nối API')
+        raise Exception(err_msg)
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -78,7 +71,7 @@ def get_anime_gif(action):
 
 @client.event
 async def on_ready():
-    print(f'Miko {client.user} đã sẵn sàng nhận tiền công đức trên Cloud!')
+    print(f'Miko {client.user} đã sẵn sàng!')
 
 @client.event
 async def on_message(message):
