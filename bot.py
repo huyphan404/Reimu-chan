@@ -6,7 +6,7 @@ import re
 from threading import Thread
 
 import discord
-import requests
+import aiohttp
 from flask import Flask
 
 
@@ -100,7 +100,7 @@ channel_locks = {}
 
 
 # =========================
-# GỌI GEMINI API STREAMING
+# GỌI GEMINI API STREAMING (SỬ DỤNG AIOHTTP)
 # =========================
 
 def gemini_model_candidates():
@@ -112,7 +112,7 @@ def gemini_model_candidates():
     return list(dict.fromkeys(models))
 
 
-def call_gemini(contents):
+async def call_gemini(contents):
     if not GEMINI_API_KEY:
         raise RuntimeError(
             "Thiếu biến môi trường GEMINI_API_KEY"
@@ -131,132 +131,104 @@ def call_gemini(contents):
 
     last_error = None
 
-    for model in gemini_model_candidates():
-        url = (
-            "https://generativelanguage.googleapis.com/"
-            f"{GEMINI_API_VERSION}/models/"
-            f"{model}:streamGenerateContent"
-        )
-
-        try:
-            response = requests.post(
-                url,
-                params={
-                    "key": GEMINI_API_KEY,
-                    "alt": "sse",
-                },
-                headers={
-                    "Content-Type": "application/json",
-                    "Accept": "text/event-stream",
-                },
-                json=payload,
-                stream=True,
-
-                # 10 giây để kết nối,
-                # tối đa 60 giây chờ dữ liệu từ Gemini
-                timeout=(10, 60),
+    async with aiohttp.ClientSession() as session:
+        for model in gemini_model_candidates():
+            url = (
+                "https://generativelanguage.googleapis.com/"
+                f"{GEMINI_API_VERSION}/models/"
+                f"{model}:streamGenerateContent"
             )
 
-        except requests.RequestException as error:
-            raise RuntimeError(
-                f"Không kết nối được Gemini: {error}"
-            ) from error
-
-        if not response.ok:
             try:
-                data = response.json()
+                async with session.post(
+                    url,
+                    params={
+                        "key": GEMINI_API_KEY,
+                        "alt": "sse",
+                    },
+                    headers={
+                        "Content-Type": "application/json",
+                        "Accept": "text/event-stream",
+                    },
+                    json=payload,
+                    # 10 giây để kết nối, tối đa 60 giây chờ dữ liệu từ Gemini
+                    timeout=aiohttp.ClientTimeout(sock_connect=10, sock_read=60)
+                ) as response:
 
-            except ValueError:
-                data = {}
+                    if not response.ok:
+                        try:
+                            data = await response.json()
+                        except ValueError:
+                            data = {}
 
-            error_data = data.get(
-                "error",
-                {},
-            )
+                        error_data = data.get("error", {})
 
-            message = error_data.get(
-                "message",
-                response.text,
-            ).strip()
+                        message = error_data.get(
+                            "message",
+                            await response.text(),
+                        ).strip()
 
-            last_error = (
-                f"Gemini HTTP {response.status_code} "
-                f"với model {model}: {message}"
-            )
-
-            # Chỉ thử model khác nếu model hiện tại không tồn tại
-            if response.status_code not in (400, 404):
-                break
-
-            message_lower = message.lower()
-
-            if (
-                "model" not in message_lower
-                and "not found" not in message_lower
-            ):
-                break
-
-            continue
-
-        pieces = []
-
-        try:
-            for raw_line in response.iter_lines(
-                decode_unicode=True
-            ):
-                if not raw_line:
-                    continue
-
-                line = raw_line.strip()
-
-                if not line.startswith("data:"):
-                    continue
-
-                raw_data = line[5:].strip()
-
-                if raw_data == "[DONE]":
-                    break
-
-                try:
-                    data = json.loads(raw_data)
-
-                except json.JSONDecodeError:
-                    continue
-
-                for candidate in data.get(
-                    "candidates",
-                    [],
-                ):
-                    content = candidate.get(
-                        "content",
-                        {},
-                    )
-
-                    for part in content.get(
-                        "parts",
-                        [],
-                    ):
-                        text = part.get(
-                            "text",
-                            "",
+                        last_error = (
+                            f"Gemini HTTP {response.status} "
+                            f"với model {model}: {message}"
                         )
 
-                        if text:
-                            pieces.append(text)
+                        if response.status not in (400, 404):
+                            break
 
-        except requests.RequestException as error:
+                        message_lower = message.lower()
+
+                        if (
+                            "model" not in message_lower
+                            and "not found" not in message_lower
+                        ):
+                            break
+
+                        continue
+
+                    pieces = []
+
+                    # Đọc stream và giải mã bằng UTF-8 (Sửa lỗi hiển thị phông chữ)
+                    async for raw_line in response.content:
+                        if not raw_line:
+                            continue
+                            
+                        # Ép kiểu decode('utf-8') để không bị lỗi Mojibake
+                        line = raw_line.decode('utf-8').strip()
+
+                        if not line.startswith("data:"):
+                            continue
+
+                        raw_data = line[5:].strip()
+
+                        if raw_data == "[DONE]":
+                            break
+
+                        try:
+                            data = json.loads(raw_data)
+                        except json.JSONDecodeError:
+                            continue
+
+                        for candidate in data.get("candidates", []):
+                            content = candidate.get("content", {})
+                            for part in content.get("parts", []):
+                                text = part.get("text", "")
+                                if text:
+                                    pieces.append(text)
+
+            except aiohttp.ClientError as error:
+                raise RuntimeError(
+                    f"Không kết nối được Gemini: {error}"
+                ) from error
+
+            result = "".join(pieces).strip()
+
+            if result:
+                return result
+
             raise RuntimeError(
-                f"Gemini stream bị gián đoạn: {error}"
-            ) from error
-
-        result = "".join(pieces).strip()
-
-        if result:
-            return result
-
-        raise RuntimeError(
-            "Gemini không gửi nội dung trả lời."
-        )
+                "Gemini không gửi nội dung trả lời."
+            )
 
     raise RuntimeError(
         last_error or "Gemini không trả về kết quả"
@@ -486,11 +458,8 @@ async def on_message(message):
 
             # Chỉ hiện typing khi chờ Gemini
             async with message.channel.typing():
-                bot_reply = await asyncio.to_thread(
-                    call_gemini,
-                    contents,
-                )
-
+                # Đã chuyển sang aiohttp, có thể dùng await trực tiếp (không cần Thread)
+                bot_reply = await call_gemini(contents)
                 bot_reply = bot_reply.strip()
 
             save_conversation(
@@ -541,10 +510,10 @@ logging.basicConfig(
 )
 
 
-keep_alive()
+if __name__ == "__main__":
+    keep_alive()
 
-
-client.run(
-    DISCORD_TOKEN,
-    log_handler=None,
-)
+    client.run(
+        DISCORD_TOKEN,
+        log_handler=None,
+    )
