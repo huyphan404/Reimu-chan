@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import os
 import re
@@ -47,7 +48,6 @@ def keep_alive():
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-# Model Gemini hiện tại
 GEMINI_MODEL = os.getenv(
     "GEMINI_MODEL",
     "gemini-3.6-flash",
@@ -58,21 +58,8 @@ GEMINI_API_VERSION = os.getenv(
     "v1beta",
 )
 
-# Giảm số tin nhắn lịch sử để Gemini phản hồi nhanh hơn
+# Giảm lịch sử để Gemini phản hồi nhanh hơn
 MAX_HISTORY_MESSAGES = 8
-
-DEFAULT_GIF_ACTION = "smile"
-
-# Đặt ENABLE_GIF=false trên Render nếu muốn nhanh hơn nữa
-ENABLE_GIF = os.getenv(
-    "ENABLE_GIF",
-    "true",
-).lower() in {
-    "1",
-    "true",
-    "yes",
-    "on",
-}
 
 
 try:
@@ -87,27 +74,6 @@ except ValueError:
         "CHAT_CHANNEL_ID không hợp lệ; "
         "bot chỉ trả lời khi được gọi."
     )
-
-
-VALID_GIF_ACTIONS = {
-    "bite",
-    "blush",
-    "bored",
-    "cry",
-    "dance",
-    "facepalm",
-    "happy",
-    "laugh",
-    "pat",
-    "pout",
-    "punch",
-    "slap",
-    "sleep",
-    "smile",
-    "think",
-    "wave",
-    "wink",
-}
 
 
 # =========================
@@ -126,16 +92,6 @@ và có liên quan đến mạch hội thoại. Đừng lặp lại câu hỏi c
 
 Có thể trêu chọc hoặc càu nhàu nhẹ theo tính cách của Reimu,
 nhưng vẫn phải hữu ích và dễ thương khi phù hợp.
-
-Chỉ thêm tối đa 1 GIF tag khi cảm xúc hoặc hành động thật sự phù hợp.
-Nếu không phù hợp thì không thêm GIF.
-
-Các GIF tag hợp lệ là:
-[GIF: bite], [GIF: blush], [GIF: bored], [GIF: cry],
-[GIF: dance], [GIF: facepalm], [GIF: happy], [GIF: laugh],
-[GIF: pat], [GIF: pout], [GIF: punch], [GIF: slap],
-[GIF: sleep], [GIF: smile], [GIF: think], [GIF: wave],
-[GIF: wink].
 """
 
 
@@ -144,15 +100,10 @@ channel_locks = {}
 
 
 # =========================
-# GỌI GEMINI API
+# GỌI GEMINI API STREAMING
 # =========================
 
 def gemini_model_candidates():
-    """
-    Nếu Render còn đặt GEMINI_MODEL cũ,
-    bot sẽ tự thử lại bằng gemini-3.6-flash.
-    """
-
     models = [
         GEMINI_MODEL,
         "gemini-3.6-flash",
@@ -184,20 +135,26 @@ def call_gemini(contents):
         url = (
             "https://generativelanguage.googleapis.com/"
             f"{GEMINI_API_VERSION}/models/"
-            f"{model}:generateContent"
+            f"{model}:streamGenerateContent"
         )
 
         try:
             response = requests.post(
                 url,
                 params={
-                    "key": GEMINI_API_KEY
+                    "key": GEMINI_API_KEY,
+                    "alt": "sse",
                 },
                 headers={
-                    "Content-Type": "application/json"
+                    "Content-Type": "application/json",
+                    "Accept": "text/event-stream",
                 },
                 json=payload,
-                timeout=25,
+                stream=True,
+
+                # 10 giây để kết nối,
+                # tối đa 60 giây chờ dữ liệu từ Gemini
+                timeout=(10, 60),
             )
 
         except requests.RequestException as error:
@@ -205,98 +162,105 @@ def call_gemini(contents):
                 f"Không kết nối được Gemini: {error}"
             ) from error
 
-        try:
-            data = response.json()
-
-        except ValueError:
-            data = {}
-
-        if response.ok:
+        if not response.ok:
             try:
-                return data[
-                    "candidates"
-                ][0][
-                    "content"
-                ][
-                    "parts"
-                ][0]["text"]
+                data = response.json()
 
-            except (
-                KeyError,
-                IndexError,
-                TypeError,
-            ) as error:
-                feedback = data.get(
-                    "promptFeedback",
-                    data,
-                )
+            except ValueError:
+                data = {}
 
-                raise RuntimeError(
-                    "Gemini trả về dữ liệu không hợp lệ: "
-                    f"{feedback}"
-                ) from error
+            error_data = data.get(
+                "error",
+                {},
+            )
 
-        error_data = data.get(
-            "error",
-            {},
+            message = error_data.get(
+                "message",
+                response.text,
+            ).strip()
+
+            last_error = (
+                f"Gemini HTTP {response.status_code} "
+                f"với model {model}: {message}"
+            )
+
+            # Chỉ thử model khác nếu model hiện tại không tồn tại
+            if response.status_code not in (400, 404):
+                break
+
+            message_lower = message.lower()
+
+            if (
+                "model" not in message_lower
+                and "not found" not in message_lower
+            ):
+                break
+
+            continue
+
+        pieces = []
+
+        try:
+            for raw_line in response.iter_lines(
+                decode_unicode=True
+            ):
+                if not raw_line:
+                    continue
+
+                line = raw_line.strip()
+
+                if not line.startswith("data:"):
+                    continue
+
+                raw_data = line[5:].strip()
+
+                if raw_data == "[DONE]":
+                    break
+
+                try:
+                    data = json.loads(raw_data)
+
+                except json.JSONDecodeError:
+                    continue
+
+                for candidate in data.get(
+                    "candidates",
+                    [],
+                ):
+                    content = candidate.get(
+                        "content",
+                        {},
+                    )
+
+                    for part in content.get(
+                        "parts",
+                        [],
+                    ):
+                        text = part.get(
+                            "text",
+                            "",
+                        )
+
+                        if text:
+                            pieces.append(text)
+
+        except requests.RequestException as error:
+            raise RuntimeError(
+                f"Gemini stream bị gián đoạn: {error}"
+            ) from error
+
+        result = "".join(pieces).strip()
+
+        if result:
+            return result
+
+        raise RuntimeError(
+            "Gemini không gửi nội dung trả lời."
         )
-
-        message = error_data.get(
-            "message",
-            response.text,
-        ).strip()
-
-        last_error = (
-            f"Gemini HTTP {response.status_code} "
-            f"với model {model}: {message}"
-        )
-
-        # Chỉ thử model khác nếu lỗi là model không tồn tại
-        if response.status_code not in (400, 404):
-            break
-
-        message_lower = message.lower()
-
-        if (
-            "model" not in message_lower
-            and "not found" not in message_lower
-        ):
-            break
 
     raise RuntimeError(
         last_error or "Gemini không trả về kết quả"
     )
-
-
-# =========================
-# LẤY GIF
-# =========================
-
-def get_anime_gif(action):
-    if action not in VALID_GIF_ACTIONS:
-        action = DEFAULT_GIF_ACTION
-
-    try:
-        response = requests.get(
-            f"https://nekos.best/api/v2/{action}",
-            timeout=10,
-        )
-
-        response.raise_for_status()
-
-        return response.json()[
-            "results"
-        ][0]["url"]
-
-    except (
-        requests.RequestException,
-        KeyError,
-        IndexError,
-        TypeError,
-        ValueError,
-    ):
-        # GIF lỗi thì bot vẫn hoạt động bình thường
-        return None
 
 
 # =========================
@@ -434,52 +398,6 @@ def save_conversation(
     )
 
 
-def split_reply_and_gif(reply):
-    gif_match = re.search(
-        r"\[GIF:\s*([a-zA-Z]+)\s*\]",
-        reply or "",
-    )
-
-    action = DEFAULT_GIF_ACTION
-
-    if gif_match:
-        requested_action = (
-            gif_match.group(1).lower()
-        )
-
-        if requested_action in VALID_GIF_ACTIONS:
-            action = requested_action
-
-        reply = reply.replace(
-            gif_match.group(0),
-            "",
-            1,
-        ).strip()
-
-    return reply, action
-
-
-async def send_gif_later(channel, action):
-    """
-    Gửi GIF ở background.
-    Người dùng không phải chờ GIF mới nhận được câu trả lời.
-    """
-
-    try:
-        gif_url = await asyncio.to_thread(
-            get_anime_gif,
-            action,
-        )
-
-        if gif_url:
-            await channel.send(gif_url)
-
-    except discord.DiscordException:
-        logging.exception(
-            "Không gửi được GIF lên Discord"
-        )
-
-
 # =========================
 # KHỞI TẠO DISCORD BOT
 # =========================
@@ -566,42 +484,28 @@ async def on_message(message):
                 user_text,
             )
 
-            # Chỉ hiện typing khi đang chờ Gemini
+            # Chỉ hiện typing khi chờ Gemini
             async with message.channel.typing():
-                raw_reply = await asyncio.to_thread(
+                bot_reply = await asyncio.to_thread(
                     call_gemini,
                     contents,
                 )
 
-                bot_reply, gif_action = (
-                    split_reply_and_gif(
-                        raw_reply
-                    )
-                )
+                bot_reply = bot_reply.strip()
 
-            # Lưu lịch sử sau khi Gemini trả lời
             save_conversation(
                 message,
                 user_text,
                 bot_reply,
             )
 
-            # Gửi câu trả lời ngay
+            # Gửi câu trả lời bằng chữ
             for chunk in split_discord_message(
                 bot_reply
             ):
                 await message.reply(
                     chunk,
                     mention_author=False,
-                )
-
-            # GIF chạy nền, không làm chậm câu trả lời
-            if ENABLE_GIF:
-                asyncio.create_task(
-                    send_gif_later(
-                        message.channel,
-                        gif_action,
-                    )
                 )
 
         except Exception as error:
