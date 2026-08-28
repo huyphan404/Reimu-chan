@@ -74,7 +74,7 @@ channel_locks = {}
 
 
 # =========================
-# GỌI GEMINI API STREAMING (CẬP NHẬT HIỆU ỨNG GÕ PHÍM & FIX MẠNG)
+# GỌI GEMINI API STREAMING
 # =========================
 
 def gemini_model_candidates():
@@ -82,7 +82,6 @@ def gemini_model_candidates():
     return list(dict.fromkeys(models))
 
 
-# Thay vì chờ lấy hết text, ta dùng "yield" để đẩy từng chữ ra ngay lập tức
 async def call_gemini_stream(contents):
     if not GEMINI_API_KEY:
         raise RuntimeError("Thiếu biến môi trường GEMINI_API_KEY")
@@ -94,7 +93,6 @@ async def call_gemini_stream(contents):
     
     last_error = None
 
-    # Fix triệt để lỗi kết nối chậm trên Windows bằng cách ép dùng IPv4
     connector = aiohttp.TCPConnector(family=socket.AF_INET)
     
     async with aiohttp.ClientSession(connector=connector) as session:
@@ -132,7 +130,6 @@ async def call_gemini_stream(contents):
                             break
                         continue
 
-                    # Bắt đầu đọc dữ liệu và nhả từng chữ ngay khi có
                     async for raw_line in response.content:
                         if not raw_line:
                             continue
@@ -157,7 +154,7 @@ async def call_gemini_stream(contents):
                         except json.JSONDecodeError:
                             continue
                             
-                    return # Xong model này thì thoát
+                    return 
 
             except aiohttp.ClientError as error:
                 last_error = f"Không kết nối được Gemini: {error}"
@@ -247,7 +244,7 @@ async def on_disconnect():
 
 
 # =========================
-# XỬ LÝ TIN NHẮN (CẬP NHẬT HIỆU ỨNG LIVE TYPING)
+# XỬ LÝ TIN NHẮN
 # =========================
 
 @client.event
@@ -257,25 +254,38 @@ async def on_message(message):
     if not is_triggered(message):
         return
 
+    # --- TÍNH NĂNG XÓA TRÍ NHỚ ---
+    user_text = extract_user_text(message)
+    user_text_lower = user_text.lower()
+    
+    if user_text_lower in ["clear", "forget", "reset", "xóa trí nhớ", "quên đi"]:
+        channel_id = message.channel.id
+        if channel_id in conversation_history:
+            conversation_history.pop(channel_id)
+        
+        await message.reply(
+            "Cái gì cơ? Ngươi vừa nói gì ta chả nhớ gì cả. Chắc do ta buồn ngủ quá...", 
+            mention_author=False
+        )
+        return
+    # --------------------------------
+
     lock = channel_locks.setdefault(message.channel.id, asyncio.Lock())
 
     async with lock:
         try:
-            user_text = extract_user_text(message)
             contents = build_contents(message, user_text)
 
             bot_reply = ""
             reply_message = None
             last_edit_time = 0
-            edit_interval = 1.5 # Giới hạn cập nhật 1.5s/lần để tránh Discord báo lỗi spam
+            edit_interval = 1.5 
 
-            # Bắt đầu luồng nhận chữ trực tiếp từ Gemini
             async with message.channel.typing():
                 async for chunk in call_gemini_stream(contents):
                     bot_reply += chunk
                     now = time.time()
                     
-                    # Cập nhật trực tiếp tin nhắn trên Discord
                     if now - last_edit_time > edit_interval and len(bot_reply) < 1950:
                         display_text = bot_reply + " ✍️"
                         if not reply_message:
@@ -284,13 +294,12 @@ async def on_message(message):
                             try:
                                 await reply_message.edit(content=display_text)
                             except discord.DiscordException:
-                                pass # Bỏ qua nếu lỡ chỉnh sửa quá nhanh bị Discord chặn
+                                pass 
                         last_edit_time = now
 
             bot_reply = bot_reply.strip()
             save_conversation(message, user_text, bot_reply)
 
-            # Hoàn thiện tin nhắn cuối cùng (xóa icon ✍️ và kiểm tra giới hạn 2000 ký tự)
             if reply_message:
                 if len(bot_reply) <= 2000:
                     await reply_message.edit(content=bot_reply)
