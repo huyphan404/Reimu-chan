@@ -8,7 +8,7 @@ import time
 from threading import Thread
 
 import discord
-from discord import app_commands # Import module để làm Slash Command
+from discord import app_commands
 import aiohttp
 from flask import Flask
 
@@ -112,13 +112,17 @@ async def call_gemini_stream(contents):
                 ) as response:
 
                     if not response.ok:
+                        text_content = await response.text()
                         try:
-                            data = await response.json()
-                        except ValueError:
+                            data = json.loads(text_content)
+                        except Exception:
                             data = {}
 
                         error_data = data.get("error", {})
-                        message = error_data.get("message", await response.text()).strip()
+                        message = error_data.get("message", text_content).strip()
+
+                        if response.status == 429:
+                            message = "Google Gemini đang quá tải, hãy đợi 1-2 phút rồi thử lại nhé!"
 
                         last_error = f"Gemini HTTP {response.status} với model {model}: {message}"
 
@@ -221,7 +225,6 @@ def save_conversation(message, user_text, bot_reply):
 if not DISCORD_TOKEN:
     raise RuntimeError("Thiếu biến môi trường DISCORD_TOKEN")
 
-# Kế thừa class Client để thêm CommandTree (cấu trúc để làm slash command)
 class ReimuBot(discord.Client):
     def __init__(self):
         intents = discord.Intents.default()
@@ -230,7 +233,6 @@ class ReimuBot(discord.Client):
         self.tree = app_commands.CommandTree(self)
 
     async def setup_hook(self):
-        # Đồng bộ hóa các lệnh gạch chéo (Slash Commands) lên Discord
         await self.tree.sync()
 
 client = ReimuBot()
@@ -254,18 +256,17 @@ async def on_disconnect():
 # ĐĂNG KÝ SLASH COMMANDS
 # =========================
 
-@client.tree.command(name="clear", description="Xóa trí nhớ của Reimu trong kênh này")
+@client.tree.command(name="clear", description="Xóa lịch sử trò chuyện của kênh này")
 async def clear_memory_slash(interaction: discord.Interaction):
     channel_id = interaction.channel.id
     if channel_id in conversation_history:
         conversation_history.pop(channel_id)
         
-    # Gửi phản hồi lại người dùng (chỉ người dùng mới thấy hoặc mọi người đều thấy tùy ý)
-    await interaction.response.send_message("Cái gì cơ? Ngươi vừa nói gì ta chả nhớ gì cả. Chắc do ta buồn ngủ quá...")
+    await interaction.response.send_message("Lịch sử trò chuyện đã được làm mới!")
 
 
 # =========================
-# XỬ LÝ TIN NHẮN BÌNH THƯỜNG
+# XỬ LÝ TIN NHẮN
 # =========================
 
 @client.event
@@ -275,7 +276,6 @@ async def on_message(message):
     if not is_triggered(message):
         return
 
-    # Mình vẫn giữ lại lệnh ẩn chat bình thường "reimu clear" phòng hờ
     user_text = extract_user_text(message)
     user_text_lower = user_text.lower()
     
@@ -284,12 +284,8 @@ async def on_message(message):
         if channel_id in conversation_history:
             conversation_history.pop(channel_id)
         
-        await message.reply(
-            "Cái gì cơ? Ngươi vừa nói gì ta chả nhớ gì cả. Chắc do ta buồn ngủ quá...", 
-            mention_author=False
-        )
+        await message.reply("Lịch sử trò chuyện đã được làm mới!", mention_author=False)
         return
-    # --------------------------------
 
     lock = channel_locks.setdefault(message.channel.id, asyncio.Lock())
 
@@ -335,7 +331,7 @@ async def on_message(message):
         except Exception as error:
             logging.exception("Lỗi xử lý tin nhắn Discord")
             try:
-                await message.reply(f"Đang bận quét lá ở đền! Mã lỗi: `{str(error)[:500]}`", mention_author=False)
+                await message.reply(f"Đã xảy ra lỗi: `{str(error)[:500]}`", mention_author=False)
             except discord.DiscordException:
                 logging.exception("Không gửi được thông báo lỗi lên Discord")
 
