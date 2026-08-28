@@ -5,12 +5,12 @@ import discord
 from flask import Flask
 from threading import Thread
 
-# --- PHẦN 1: WEBSERVER GIỮ BOT ONLINE ---
+# --- WEBSERVER GIỮ BOT ONLINE ---
 app = Flask('')
 
 @app.route('/')
 def home():
-    return "Miko Reimu đang trực đền 24/7!"
+    return "Miko Reimu đang trực đền miễn phí!"
 
 def run():
     port = int(os.environ.get('PORT', 8080))
@@ -20,9 +20,9 @@ def keep_alive():
     t = Thread(target=run)
     t.start()
 
-# --- PHẦN 2: CẤU HÌNH BOT & OPENAI (CHATGPT) API ---
+# --- CẤU HÌNH BOT & GEMINI API MIỄN PHÍ ---
 DISCORD_TOKEN = os.environ.get('DISCORD_TOKEN')
-OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
+GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
 
 SYSTEM_INSTRUCTION = (
     "Bạn là Hakurei Reimu từ Touhou Project. Tính cách: Miko của đền Hakurei, "
@@ -34,28 +34,26 @@ SYSTEM_INSTRUCTION = (
     "[GIF: slap], [GIF: sleep], [GIF: smile], [GIF: think], [GIF: wave], [GIF: wink]."
 )
 
-def call_chatgpt_api(prompt_text):
-    url = "https://api.openai.com/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {OPENAI_API_KEY}",
-        "Content-Type": "application/json"
-    }
+def call_gemini_free(prompt_text):
+    # Dùng v1beta trực tiếp, né hoàn toàn lỗi thư viện 404
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+    
     payload = {
-        "model": "gpt-4o-mini",
-        "messages": [
-            {"role": "system", "content": SYSTEM_INSTRUCTION},
-            {"role": "user", "content": prompt_text}
-        ],
-        "temperature": 0.85
+        "system_instruction": {
+            "parts": [{"text": SYSTEM_INSTRUCTION}]
+        },
+        "contents": [
+            {"role": "user", "parts": [{"text": prompt_text}]}
+        ]
     }
     
-    res = requests.post(url, headers=headers, json=payload, timeout=15)
+    res = requests.post(url, headers={'Content-Type': 'application/json'}, json=payload, timeout=15)
     data = res.json()
     
     if res.status_code == 200:
-        return data['choices'][0]['message']['content']
+        return data['candidates'][0]['content']['parts'][0]['text']
     else:
-        err_msg = data.get('error', {}).get('message', 'Lỗi kết nối OpenAI API')
+        err_msg = data.get('error', {}).get('message', res.text)
         raise Exception(err_msg)
 
 intents = discord.Intents.default()
@@ -65,14 +63,13 @@ client = discord.Client(intents=intents)
 def get_anime_gif(action):
     try:
         url = f"https://nekos.best/api/v2/{action}"
-        res = requests.get(url).json()
-        return res['results'][0]['url']
+        return requests.get(url).json()['results'][0]['url']
     except Exception:
         return None
 
 @client.event
 async def on_ready():
-    print(f'Miko {client.user} đã online bằng ChatGPT API!')
+    print(f'Miko {client.user} đã sẵn sàng nhận tiền công đức!')
 
 @client.event
 async def on_message(message):
@@ -81,13 +78,12 @@ async def on_message(message):
 
     if client.user.mentioned_in(message):
         user_text = re.sub(r'<@!?{}>'.format(client.user.id), '', message.content).strip()
-        
         if not user_text:
             user_text = "Ngươi vừa gọi ta đấy à?"
         
         async with message.channel.typing():
             try:
-                bot_reply = call_chatgpt_api(user_text)
+                bot_reply = call_gemini_free(user_text)
                 
                 gif_url = None
                 match = re.search(r'\[GIF:(.*?)\]', bot_reply)
@@ -100,8 +96,8 @@ async def on_message(message):
                 if gif_url:
                     await message.channel.send(gif_url)
             except Exception as e:
-                print(f"Lỗi chi tiết: {e}")
-                await message.reply(f"Đang bận quét lá ở đền rồi! Mã lỗi: `{e}`")
+                print(f"Lỗi: {e}")
+                await message.reply(f"Đang bận quét lá ở đền! Mã lỗi: `{e}`")
 
 keep_alive()
 client.run(DISCORD_TOKEN)
