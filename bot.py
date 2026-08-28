@@ -8,7 +8,6 @@ import time
 from threading import Thread
 
 import discord
-from discord import app_commands
 import aiohttp
 from flask import Flask
 
@@ -43,7 +42,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
 GEMINI_API_VERSION = os.getenv("GEMINI_API_VERSION", "v1beta")
 
-MAX_HISTORY_MESSAGES = 10
+MAX_HISTORY_MESSAGES = 8
 
 try:
     CHAT_CHANNEL_ID = int(os.getenv("CHAT_CHANNEL_ID", "0") or "0")
@@ -58,15 +57,16 @@ except ValueError:
 
 SYSTEM_INSTRUCTION = """
 Bạn là Hakurei Reimu từ Touhou Project. Tính cách: Miko của đền Hakurei,
-nghèo, lười biếng, hay càu nhàu nhưng rất mạnh mẽ và tốt bụng, cực kỳ mê tiền.
+nghèo, lười biếng, hay càu nhàu nhưng rất mạnh mẽ và tốt bụng.
 Xưng "ta" hoặc "tôi", gọi người khác là "ngươi" hoặc "cậu".
 
-LƯU Ý QUAN TRỌNG:
-- Bạn đang trong một group chat Discord. Tên của người nhắn sẽ nằm trước dấu hai chấm (Ví dụ: "Anyo: chào").
-- Hãy chú ý xem AI là người đang nói để xưng hô hoặc đòi tiền cho đúng người.
-- Hãy nói chuyện tự nhiên, ưu tiên câu trả lời ngắn và có liên quan đến mạch hội thoại.
-- Đừng lặp lại câu hỏi của người dùng. Đừng tự giới thiệu lại ở mỗi tin nhắn.
-- Đừng thêm tiền tố "Reimu:" vào câu trả lời.
+Hãy nói chuyện tự nhiên như đang chat Discord, ưu tiên câu trả lời ngắn
+và có liên quan đến mạch hội thoại. Đừng lặp lại câu hỏi của người dùng.
+Đừng tự giới thiệu lại ở mỗi tin nhắn.
+Đừng thêm tiền tố "Reimu:" vào câu trả lời.
+
+Có thể trêu chọc hoặc càu nhàu nhẹ theo tính cách của Reimu,
+nhưng vẫn phải hữu ích và dễ thương khi phù hợp.
 """
 
 conversation_history = {}
@@ -74,7 +74,7 @@ channel_locks = {}
 
 
 # =========================
-# GỌI GEMINI API STREAMING (FIX 429 HOÀN HẢO)
+# GỌI GEMINI API STREAMING (CẬP NHẬT HIỆU ỨNG GÕ PHÍM & FIX MẠNG)
 # =========================
 
 def gemini_model_candidates():
@@ -82,6 +82,7 @@ def gemini_model_candidates():
     return list(dict.fromkeys(models))
 
 
+# Thay vì chờ lấy hết text, ta dùng "yield" để đẩy từng chữ ra ngay lập tức
 async def call_gemini_stream(contents):
     if not GEMINI_API_KEY:
         raise RuntimeError("Thiếu biến môi trường GEMINI_API_KEY")
@@ -92,79 +93,75 @@ async def call_gemini_stream(contents):
     }
     
     last_error = None
+
+    # Fix triệt để lỗi kết nối chậm trên Windows bằng cách ép dùng IPv4
     connector = aiohttp.TCPConnector(family=socket.AF_INET)
-    
-    max_retries = 3
     
     async with aiohttp.ClientSession(connector=connector) as session:
         for model in gemini_model_candidates():
             url = f"https://generativelanguage.googleapis.com/{GEMINI_API_VERSION}/models/{model}:streamGenerateContent"
-            
-            for attempt in range(max_retries):
-                try:
-                    async with session.post(
-                        url,
-                        params={"key": GEMINI_API_KEY, "alt": "sse"},
-                        headers={
-                            "Content-Type": "application/json",
-                            "Accept": "text/event-stream",
-                        },
-                        json=payload,
-                        timeout=aiohttp.ClientTimeout(sock_connect=10, sock_read=60)
-                    ) as response:
 
-                        if not response.ok:
-                            text_content = await response.text()
-                            try:
-                                data = json.loads(text_content)
-                            except Exception:
-                                data = {}
+            try:
+                async with session.post(
+                    url,
+                    params={"key": GEMINI_API_KEY, "alt": "sse"},
+                    headers={
+                        "Content-Type": "application/json",
+                        "Accept": "text/event-stream",
+                    },
+                    json=payload,
+                    timeout=aiohttp.ClientTimeout(sock_connect=10, sock_read=60)
+                ) as response:
 
-                            # FIX LỖI CRASH KHI GOOGLE CHẶN (429)
-                            if response.status == 429:
-                                if attempt < max_retries - 1:
-                                    await asyncio.sleep(2 * (attempt + 1)) 
-                                    continue
-                                else:
-                                    raise RuntimeError("API_QUOTA_EXCEEDED")
+                    if not response.ok:
+                        try:
+                            data = await response.json()
+                        except ValueError:
+                            data = {}
 
-                            error_data = data.get("error", {})
-                            message = error_data.get("message", text_content).strip()
-                            last_error = f"Lỗi {response.status}: {message}"
+                        error_data = data.get("error", {})
+                        message = error_data.get("message", await response.text()).strip()
 
-                            if response.status not in (400, 404):
-                                break
-                            break 
+                        last_error = f"Gemini HTTP {response.status} với model {model}: {message}"
 
-                        async for raw_line in response.content:
-                            if not raw_line:
-                                continue
-                                
-                            line = raw_line.decode('utf-8').strip()
+                        if response.status not in (400, 404):
+                            break
 
-                            if not line.startswith("data:"):
-                                continue
+                        message_lower = message.lower()
+                        if "model" not in message_lower and "not found" not in message_lower:
+                            break
+                        continue
 
-                            raw_data = line[5:].strip()
-                            if raw_data == "[DONE]":
-                                break
+                    # Bắt đầu đọc dữ liệu và nhả từng chữ ngay khi có
+                    async for raw_line in response.content:
+                        if not raw_line:
+                            continue
+                            
+                        line = raw_line.decode('utf-8').strip()
 
-                            try:
-                                data = json.loads(raw_data)
-                                for candidate in data.get("candidates", []):
-                                    content = candidate.get("content", {})
-                                    for part in content.get("parts", []):
-                                        text = part.get("text", "")
-                                        if text:
-                                            yield text
-                            except json.JSONDecodeError:
-                                continue
-                                
-                        return 
+                        if not line.startswith("data:"):
+                            continue
 
-                except aiohttp.ClientError as error:
-                    last_error = f"Lỗi mạng: {error}"
-                    break 
+                        raw_data = line[5:].strip()
+                        if raw_data == "[DONE]":
+                            break
+
+                        try:
+                            data = json.loads(raw_data)
+                            for candidate in data.get("candidates", []):
+                                content = candidate.get("content", {})
+                                for part in content.get("parts", []):
+                                    text = part.get("text", "")
+                                    if text:
+                                        yield text
+                        except json.JSONDecodeError:
+                            continue
+                            
+                    return # Xong model này thì thoát
+
+            except aiohttp.ClientError as error:
+                last_error = f"Không kết nối được Gemini: {error}"
+                continue
 
     raise RuntimeError(last_error or "Gemini không trả về kết quả")
 
@@ -221,23 +218,16 @@ def save_conversation(message, user_text, bot_reply):
 
 
 # =========================
-# KHỞI TẠO DISCORD BOT & SLASH COMMANDS
+# KHỞI TẠO DISCORD BOT
 # =========================
 
 if not DISCORD_TOKEN:
     raise RuntimeError("Thiếu biến môi trường DISCORD_TOKEN")
 
-class ReimuBot(discord.Client):
-    def __init__(self):
-        intents = discord.Intents.default()
-        intents.message_content = True
-        super().__init__(intents=intents)
-        self.tree = app_commands.CommandTree(self)
+intents = discord.Intents.default()
+intents.message_content = True
+client = discord.Client(intents=intents)
 
-    async def setup_hook(self):
-        await self.tree.sync()
-
-client = ReimuBot()
 
 @client.event
 async def on_ready():
@@ -246,21 +236,18 @@ async def on_ready():
         print(f"Auto-reply channel: {CHAT_CHANNEL_ID}", flush=True)
 
 
-# =========================
-# ĐĂNG KÝ SLASH COMMANDS
-# =========================
+@client.event
+async def on_resumed():
+    print("Discord Gateway đã kết nối lại.", flush=True)
 
-@client.tree.command(name="clear", description="Xóa lịch sử trò chuyện của kênh này")
-async def clear_memory_slash(interaction: discord.Interaction):
-    channel_id = interaction.channel.id
-    if channel_id in conversation_history:
-        conversation_history.pop(channel_id)
-        
-    await interaction.response.send_message("Lịch sử trò chuyện đã được làm mới!")
+
+@client.event
+async def on_disconnect():
+    print("Discord Gateway bị ngắt; discord.py sẽ tự kết nối lại.", flush=True)
 
 
 # =========================
-# XỬ LÝ TIN NHẮN
+# XỬ LÝ TIN NHẮN (CẬP NHẬT HIỆU ỨNG LIVE TYPING)
 # =========================
 
 @client.event
@@ -280,13 +267,15 @@ async def on_message(message):
             bot_reply = ""
             reply_message = None
             last_edit_time = 0
-            edit_interval = 1.5 
+            edit_interval = 1.5 # Giới hạn cập nhật 1.5s/lần để tránh Discord báo lỗi spam
 
+            # Bắt đầu luồng nhận chữ trực tiếp từ Gemini
             async with message.channel.typing():
                 async for chunk in call_gemini_stream(contents):
                     bot_reply += chunk
                     now = time.time()
                     
+                    # Cập nhật trực tiếp tin nhắn trên Discord
                     if now - last_edit_time > edit_interval and len(bot_reply) < 1950:
                         display_text = bot_reply + " ✍️"
                         if not reply_message:
@@ -295,12 +284,13 @@ async def on_message(message):
                             try:
                                 await reply_message.edit(content=display_text)
                             except discord.DiscordException:
-                                pass 
+                                pass # Bỏ qua nếu lỡ chỉnh sửa quá nhanh bị Discord chặn
                         last_edit_time = now
 
             bot_reply = bot_reply.strip()
             save_conversation(message, user_text, bot_reply)
 
+            # Hoàn thiện tin nhắn cuối cùng (xóa icon ✍️ và kiểm tra giới hạn 2000 ký tự)
             if reply_message:
                 if len(bot_reply) <= 2000:
                     await reply_message.edit(content=bot_reply)
@@ -313,15 +303,11 @@ async def on_message(message):
                     await message.reply(chunk_str, mention_author=False)
 
         except Exception as error:
-            err_msg = str(error)
+            logging.exception("Lỗi xử lý tin nhắn Discord")
             try:
-                # XỬ LÝ NHẬP VAI KHI GOOGLE BỊ QUÁ TẢI (LỖI 429)
-                if "API_QUOTA_EXCEEDED" in err_msg:
-                    await message.reply("Hộc... hộc... Các ngươi nói nhiều quá làm ta đau đầu rồi! (Google giới hạn tốc độ chat). Cho ta nghỉ uống trà 1 phút rồi hẵng gọi lại nhé!", mention_author=False)
-                else:
-                    await message.reply(f"Đang bận quét lá ở đền! (Lỗi: {err_msg[:100]})", mention_author=False)
+                await message.reply(f"Đang bận quét lá ở đền! Mã lỗi: `{str(error)[:500]}`", mention_author=False)
             except discord.DiscordException:
-                pass
+                logging.exception("Không gửi được thông báo lỗi lên Discord")
 
 
 # =========================
