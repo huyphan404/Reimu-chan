@@ -33,39 +33,34 @@ def keep_alive():
 # =========================
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "qwen/qwen-2.5-72b-instruct:free").strip()
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "openrouter/free").strip()
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://openrouter.ai/api/v1").strip().rstrip('/')
 
 MAX_HISTORY_MESSAGES = 8
-
-try:
-    CHAT_CHANNEL_ID = int(os.getenv("CHAT_CHANNEL_ID", "0") or "0")
-except ValueError:
-    CHAT_CHANNEL_ID = 0
+try: CHAT_CHANNEL_ID = int(os.getenv("CHAT_CHANNEL_ID", "0") or "0")
+except ValueError: CHAT_CHANNEL_ID = 0
 
 # =========================
-# TÍNH CÁCH REIMU (ĐÃ FIX CHUẨN)
+# TÍNH CÁCH REIMU
 # =========================
 SYSTEM_INSTRUCTION = """
-BẠN ĐANG ĐÓNG VAI: Hakurei Reimu - Miko của đền Hakurei tại Ảo Tưởng Hương (Gensokyo).
+BẠN ĐANG ĐÓNG VAI: Hakurei Reimu - Miko của đền Hakurei.
 
 TÍNH CÁCH:
-- Nghèo, lười biếng, hay càu nhàu, nhưng rất mạnh mẽ.
-- Mê tiền, thường xuyên nhắc người khác bỏ tiền vào hòm công đức. 
-- Giọng điệu bề trên, hơi cộc cằn nhưng thực tâm tốt bụng. Quá khứ chỉ ở đền quét lá diệt yêu quái.
+- Nghèo, lười, hay càu nhàu nhưng cực kỳ mạnh mẽ. Rất mê tiền.
 
 QUY TẮC BẮT BUỘC (NẾU VI PHẠM SẼ BỊ HỦY DIỆT):
-1. XƯNG HÔ: Bắt buộc xưng "ta", gọi đối phương là "ngươi", "nhà ngươi" hoặc "khách". 
-2. TUYỆT ĐỐI KHÔNG BAO GIỜ xưng "mình", "tôi", "em" và KHÔNG BAO GIỜ gọi đối phương là "bạn", "cậu".
-3. Trả lời cực kỳ ngắn gọn (1-3 câu), đi thẳng vào vấn đề. KHÔNG giải thích dông dài. KHÔNG lặp lại lời người khác.
-4. KHÔNG bao giờ tự xưng tên ở đầu câu (Ví dụ: cấm viết "Reimu: ...").
+1. Bắt buộc xưng "ta", gọi đối phương là "ngươi", "khách". 
+2. TUYỆT ĐỐI KHÔNG xưng "mình", "tôi", "em". KHÔNG gọi đối phương là "bạn", "cậu".
+3. KHÔNG BAO GIỜ tự xưng tên ở đầu câu (cấm viết "Reimu:").
+4. CẤM TUYỆT ĐỐI việc in ra các thông báo hệ thống như "User Safety: safe" hay "Response Safety:". Chỉ được đóng vai Reimu trả lời.
 """
 
 conversation_history = {}
 channel_locks = {}
 
 # =========================
-# GỌI API (CÓ THUỐC CHỐNG LẶP TỪ)
+# GỌI API
 # =========================
 async def call_openai_stream(messages):
     url = f"{OPENAI_BASE_URL}/chat/completions"
@@ -81,7 +76,7 @@ async def call_openai_stream(messages):
         "messages": messages,
         "stream": True,
         "temperature": 0.7,
-        "frequency_penalty": 1.0, # Thuốc đặc trị: Ép AI không được nói lặp từ
+        "frequency_penalty": 1.0, 
         "max_tokens": 400
     }
 
@@ -93,12 +88,9 @@ async def call_openai_stream(messages):
                 timeout=aiohttp.ClientTimeout(sock_connect=10, sock_read=60)
             ) as response:
                 
-                if response.status == 429:
-                    raise RuntimeError("RATE_LIMIT")
-                    
+                if response.status == 429: raise RuntimeError("RATE_LIMIT")
                 if not response.ok:
-                    raw_text = await response.text()
-                    raise RuntimeError(f"Lỗi hệ thống ({response.status}): {raw_text}")
+                    raise RuntimeError(f"Lỗi hệ thống ({response.status})")
 
                 async for raw_line in response.content:
                     if not raw_line: continue
@@ -113,11 +105,8 @@ async def call_openai_stream(messages):
                         if choices:
                             delta = choices[0].get("delta", {})
                             text = delta.get("content", "")
-                            if text:
-                                yield text
-                    except json.JSONDecodeError:
-                        continue
-
+                            if text: yield text
+                    except json.JSONDecodeError: continue
         except (aiohttp.ClientError, asyncio.TimeoutError) as error:
             raise RuntimeError(f"Lỗi mạng: {error}")
 
@@ -128,10 +117,8 @@ def split_discord_message(text, limit=2000):
     return [text[i:i + limit] for i in range(0, max(1, len(text)), limit)]
 
 def is_triggered(message):
-    if client.user and client.user.mentioned_in(message):
-        return True
-    if CHAT_CHANNEL_ID and message.channel.id == CHAT_CHANNEL_ID:
-        return True
+    if client.user and client.user.mentioned_in(message): return True
+    if CHAT_CHANNEL_ID and message.channel.id == CHAT_CHANNEL_ID: return True
     return bool(re.match(r"^\s*reimu(?:\s+ơi)?(?:\s*[,!:：-])?(?:\s|$)", message.content or "", flags=re.IGNORECASE))
 
 def extract_user_text(message):
@@ -144,8 +131,7 @@ def build_openai_messages(message, user_text):
     channel_id = message.channel.id
     history = conversation_history.get(channel_id, [])
     messages = [{"role": "system", "content": SYSTEM_INSTRUCTION}]
-    for msg in history[-MAX_HISTORY_MESSAGES:]:
-        messages.append(msg)
+    for msg in history[-MAX_HISTORY_MESSAGES:]: messages.append(msg)
     messages.append({"role": "user", "content": f"{message.author.display_name}: {user_text}"})
     return messages
 
@@ -166,9 +152,6 @@ intents.message_content = True
 client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
 
-# =========================
-# LỆNH XÓA TRÍ NHỚ /CLEARMEM
-# =========================
 @tree.command(name="clearmem", description="Xóa trí nhớ của Reimu trong kênh này")
 async def clearmem(interaction: discord.Interaction):
     channel_id = interaction.channel.id
@@ -176,20 +159,14 @@ async def clearmem(interaction: discord.Interaction):
         conversation_history[channel_id] = []
     await interaction.response.send_message("Hả? Vừa nãy ta với ngươi nói gì cơ? Trí nhớ ta trống rỗng rồi... (Đã xóa lịch sử chat 🧹)")
 
-# =========================
-# EVENT READY
-# =========================
 @client.event
 async def on_ready():
     print(f"=====================================")
     print(f"Miko {client.user} đã sẵn sàng!")
     print(f"-> ĐANG DÙNG MODEL: {OPENAI_MODEL}")
     print(f"=====================================", flush=True)
-    try:
-        synced = await tree.sync()
-        print(f"Đã đồng bộ {len(synced)} lệnh (/) thành công!")
-    except Exception as e:
-        print(f"Lỗi đồng bộ lệnh: {e}")
+    try: await tree.sync()
+    except Exception as e: pass
 
 # =========================
 # XỬ LÝ CHAT
@@ -222,7 +199,15 @@ async def on_message(message):
                             except discord.DiscordException: pass
                         last_edit_time = now
 
+            # MÁY LỌC RÁC TỪ OPENROUTER
             bot_reply = bot_reply.strip()
+            bot_reply = re.sub(r'(?i)User Safety:.*', '', bot_reply).strip()
+            bot_reply = re.sub(r'(?i)Response Safety:.*', '', bot_reply).strip()
+            
+            # Nếu lọc xong mà rỗng (tức là con AI chỉ nhả mỗi chữ Safety)
+            if not bot_reply:
+                bot_reply = "Ngươi vừa lẩm bẩm cái gì cơ? Ta nghe không rõ, có trả tiền hòm công đức không thì bảo?"
+
             if bot_reply:
                 save_conversation(message, user_text, bot_reply)
                 if reply_message:
