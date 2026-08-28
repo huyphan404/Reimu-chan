@@ -53,7 +53,7 @@ QUY TẮC BẮT BUỘC (NẾU VI PHẠM SẼ BỊ HỦY DIỆT):
 1. Bắt buộc xưng "ta", gọi đối phương là "ngươi", "khách". 
 2. TUYỆT ĐỐI KHÔNG xưng "mình", "tôi", "em". KHÔNG gọi đối phương là "bạn", "cậu".
 3. KHÔNG BAO GIỜ tự xưng tên ở đầu câu (cấm viết "Reimu:").
-4. CẤM TUYỆT ĐỐI việc in ra các thông báo hệ thống như "User Safety: safe" hay "Response Safety:". Chỉ được đóng vai Reimu trả lời.
+4. Trả lời thẳng vào vấn đề, cộc lốc, không dài dòng.
 """
 
 conversation_history = {}
@@ -77,7 +77,7 @@ async def call_openai_stream(messages):
         "stream": True,
         "temperature": 0.7,
         "frequency_penalty": 1.0, 
-        "max_tokens": 400
+        "max_tokens": 800
     }
 
     connector = aiohttp.TCPConnector(family=socket.AF_INET)
@@ -163,13 +163,12 @@ async def clearmem(interaction: discord.Interaction):
 async def on_ready():
     print(f"=====================================")
     print(f"Miko {client.user} đã sẵn sàng!")
-    print(f"-> ĐANG DÙNG MODEL: {OPENAI_MODEL}")
     print(f"=====================================", flush=True)
     try: await tree.sync()
-    except Exception as e: pass
+    except Exception: pass
 
 # =========================
-# XỬ LÝ CHAT
+# XỬ LÝ CHAT & TÀNG HÌNH SUY NGHĨ
 # =========================
 @client.event
 async def on_message(message):
@@ -181,44 +180,59 @@ async def on_message(message):
             user_text = extract_user_text(message)
             messages = build_openai_messages(message, user_text)
 
-            bot_reply = ""
+            raw_bot_reply = ""
             reply_message = None
             last_edit_time = 0
             edit_interval = 2.0 
 
             async with message.channel.typing():
                 async for chunk in call_openai_stream(messages):
-                    bot_reply += chunk
+                    raw_bot_reply += chunk
+                    
+                    # Tàng hình phần suy nghĩ <think>...</think> của các model xịn
+                    filtered_reply = re.sub(r'<think>.*?(?:</think>|$)', '', raw_bot_reply, flags=re.DOTALL|re.IGNORECASE).strip()
+                    
+                    # Lọc luôn rác Safety của OpenRouter
+                    filtered_reply = re.sub(r'(?i)User Safety:.*', '', filtered_reply).strip()
+                    filtered_reply = re.sub(r'(?i)Response Safety:.*', '', filtered_reply).strip()
+
                     now = time.time()
-                    if now - last_edit_time > edit_interval and len(bot_reply) < 1950:
-                        display_text = bot_reply + " ✍️"
-                        if not reply_message:
-                            reply_message = await message.reply(display_text, mention_author=False)
-                        else:
-                            try: await reply_message.edit(content=display_text)
-                            except discord.DiscordException: pass
+                    if now - last_edit_time > edit_interval:
+                        display_text = filtered_reply
+                        
+                        # Nếu nó đang trong lúc suy nghĩ (chưa nhả chữ thật ra)
+                        if not display_text:
+                            display_text = "*(Đang tính toán tiền công đức...)*"
+                            
+                        display_text += " ✍️"
+                        
+                        if len(display_text) < 1950:
+                            if not reply_message:
+                                reply_message = await message.reply(display_text, mention_author=False)
+                            else:
+                                try: await reply_message.edit(content=display_text)
+                                except discord.DiscordException: pass
                         last_edit_time = now
 
-            # MÁY LỌC RÁC TỪ OPENROUTER
-            bot_reply = bot_reply.strip()
-            bot_reply = re.sub(r'(?i)User Safety:.*', '', bot_reply).strip()
-            bot_reply = re.sub(r'(?i)Response Safety:.*', '', bot_reply).strip()
-            
-            # Nếu lọc xong mà rỗng (tức là con AI chỉ nhả mỗi chữ Safety)
-            if not bot_reply:
-                bot_reply = "Ngươi vừa lẩm bẩm cái gì cơ? Ta nghe không rõ, có trả tiền hòm công đức không thì bảo?"
+            # Xử lý đoạn text cuối cùng sau khi stream xong
+            final_reply = re.sub(r'<think>.*?(?:</think>|$)', '', raw_bot_reply, flags=re.DOTALL|re.IGNORECASE).strip()
+            final_reply = re.sub(r'(?i)User Safety:.*', '', final_reply).strip()
+            final_reply = re.sub(r'(?i)Response Safety:.*', '', final_reply).strip()
 
-            if bot_reply:
-                save_conversation(message, user_text, bot_reply)
+            if not final_reply:
+                final_reply = "Ngươi vừa lẩm bẩm cái gì cơ? Ta bận quét đền nghe không rõ."
+
+            if final_reply:
+                save_conversation(message, user_text, final_reply)
                 if reply_message:
-                    if len(bot_reply) <= 2000:
-                        await reply_message.edit(content=bot_reply)
+                    if len(final_reply) <= 2000:
+                        await reply_message.edit(content=final_reply)
                     else:
-                        await reply_message.edit(content=bot_reply[:2000])
-                        for chunk_str in split_discord_message(bot_reply[2000:]):
+                        await reply_message.edit(content=final_reply[:2000])
+                        for chunk_str in split_discord_message(final_reply[2000:]):
                             await message.reply(chunk_str, mention_author=False)
                 else:
-                    for chunk_str in split_discord_message(bot_reply):
+                    for chunk_str in split_discord_message(final_reply):
                         await message.reply(chunk_str, mention_author=False)
 
         except Exception as error:
