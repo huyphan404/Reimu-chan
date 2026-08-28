@@ -5,12 +5,12 @@ import discord
 from flask import Flask
 from threading import Thread
 
-# --- WEBSERVER GIỮ BOT ONLINE ---
+# --- PHẦN 1: WEBSERVER GIỮ BOT ONLINE ---
 app = Flask('')
 
 @app.route('/')
 def home():
-    return "Miko Reimu đang trực đền!"
+    return "Miko Reimu đang trực đền 24/7!"
 
 def run():
     port = int(os.environ.get('PORT', 8080))
@@ -20,9 +20,9 @@ def keep_alive():
     t = Thread(target=run)
     t.start()
 
-# --- CẤU HÌNH BOT & TRUY VẤN GEMINI V1 ---
+# --- PHẦN 2: CẤU HÌNH BOT & OPENAI (CHATGPT) API ---
 DISCORD_TOKEN = os.environ.get('DISCORD_TOKEN')
-GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
+OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
 
 SYSTEM_INSTRUCTION = (
     "Bạn là Hakurei Reimu từ Touhou Project. Tính cách: Miko của đền Hakurei, "
@@ -34,27 +34,28 @@ SYSTEM_INSTRUCTION = (
     "[GIF: slap], [GIF: sleep], [GIF: smile], [GIF: think], [GIF: wave], [GIF: wink]."
 )
 
-def call_gemini_api(prompt_text):
-    # Dùng v1 thay vì v1beta để né hoàn toàn lỗi model 404
-    url = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
-    
+def call_chatgpt_api(prompt_text):
+    url = "https://api.openai.com/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {OPENAI_API_KEY}",
+        "Content-Type": "application/json"
+    }
     payload = {
-        "contents": [
-            {
-                "parts": [
-                    {"text": f"{SYSTEM_INSTRUCTION}\n\nNgười dùng nói: {prompt_text}"}
-                ]
-            }
-        ]
+        "model": "gpt-4o-mini",
+        "messages": [
+            {"role": "system", "content": SYSTEM_INSTRUCTION},
+            {"role": "user", "content": prompt_text}
+        ],
+        "temperature": 0.85
     }
     
-    res = requests.post(url, json=payload, timeout=15)
+    res = requests.post(url, headers=headers, json=payload, timeout=15)
     data = res.json()
     
     if res.status_code == 200:
-        return data['candidates'][0]['content']['parts'][0]['text']
+        return data['choices'][0]['message']['content']
     else:
-        err_msg = data.get('error', {}).get('message', 'Lỗi kết nối API')
+        err_msg = data.get('error', {}).get('message', 'Lỗi kết nối OpenAI API')
         raise Exception(err_msg)
 
 intents = discord.Intents.default()
@@ -71,7 +72,7 @@ def get_anime_gif(action):
 
 @client.event
 async def on_ready():
-    print(f'Miko {client.user} đã sẵn sàng!')
+    print(f'Miko {client.user} đã online bằng ChatGPT API!')
 
 @client.event
 async def on_message(message):
@@ -86,7 +87,7 @@ async def on_message(message):
         
         async with message.channel.typing():
             try:
-                bot_reply = call_gemini_api(user_text)
+                bot_reply = call_chatgpt_api(user_text)
                 
                 gif_url = None
                 match = re.search(r'\[GIF:(.*?)\]', bot_reply)
