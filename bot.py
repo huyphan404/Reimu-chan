@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 import re
 from threading import Thread
@@ -9,49 +10,86 @@ from flask import Flask
 
 
 # =========================
-# WEBSERVER GIỮ BOT ONLINE
+# HEALTH CHECK CHO DEPLOY
 # =========================
 
 app = Flask(__name__)
 
 
-@app.route("/")
+@app.get("/")
 def home():
-    return "Miko Reimu đang trực đền miễn phí!"
+    return "Miko Reimu đang trực đền!"
 
 
-def run():
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host="0.0.0.0", port=port)
+def run_health_server():
+    port = int(os.getenv("PORT", "10000"))
+    app.run(
+        host="0.0.0.0",
+        port=port,
+        debug=False,
+        use_reloader=False,
+    )
 
 
 def keep_alive():
-    thread = Thread(target=run, daemon=True)
-    thread.start()
+    Thread(
+        target=run_health_server,
+        daemon=True,
+        name="health-server",
+    ).start()
 
 
 # =========================
 # CẤU HÌNH
 # =========================
 
-DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-# Model Gemini mới
-GEMINI_MODEL = "gemini-3.6-flash"
-GEMINI_API_VERSION = "v1beta"
+# Có thể ghi đè bằng biến môi trường GEMINI_MODEL
+GEMINI_MODEL = os.getenv(
+    "GEMINI_MODEL",
+    "gemini-2.5-flash",
+)
 
-# Số tin nhắn gần nhất Reimu ghi nhớ
+GEMINI_API_VERSION = os.getenv(
+    "GEMINI_API_VERSION",
+    "v1beta",
+)
+
 MAX_HISTORY_MESSAGES = 12
-
-# Nếu Gemini không chọn GIF thì dùng GIF mặc định này
 DEFAULT_GIF_ACTION = "smile"
 
-# Để 0 nếu chỉ muốn gọi bằng @mention hoặc chữ "Reimu".
-# Nếu đặt Channel ID, bot sẽ tự trả lời mọi tin nhắn trong kênh đó.
-CHAT_CHANNEL_ID = int(
-    os.environ.get("CHAT_CHANNEL_ID", "0") or "0"
-)
+try:
+    CHAT_CHANNEL_ID = int(
+        os.getenv("CHAT_CHANNEL_ID", "0") or "0"
+    )
+except ValueError:
+    CHAT_CHANNEL_ID = 0
+    logging.warning(
+        "CHAT_CHANNEL_ID không hợp lệ; bot chỉ trả lời khi được gọi."
+    )
+
+
+VALID_GIF_ACTIONS = {
+    "bite",
+    "blush",
+    "bored",
+    "cry",
+    "dance",
+    "facepalm",
+    "happy",
+    "laugh",
+    "pat",
+    "pout",
+    "punch",
+    "slap",
+    "sleep",
+    "smile",
+    "think",
+    "wave",
+    "wink",
+}
 
 
 # =========================
@@ -83,25 +121,30 @@ Các GIF tag hợp lệ là:
 """
 
 
-# Lịch sử lưu trong RAM.
-# Khi Render restart hoặc deploy lại thì lịch sử sẽ reset.
 conversation_history = {}
+channel_locks = {}
 
 
 # =========================
 # GỌI GEMINI API
 # =========================
 
+def gemini_model_candidates():
+    models = [
+        GEMINI_MODEL,
+        "gemini-2.5-flash",
+        "gemini-2.0-flash",
+    ]
+
+    # Xóa model trùng nhau nhưng vẫn giữ thứ tự
+    return list(dict.fromkeys(models))
+
+
 def call_gemini(contents):
     if not GEMINI_API_KEY:
         raise RuntimeError(
             "Thiếu biến môi trường GEMINI_API_KEY"
         )
-
-    url = (
-        f"https://generativelanguage.googleapis.com/"
-        f"{GEMINI_API_VERSION}/models/{GEMINI_MODEL}:generateContent"
-    )
 
     payload = {
         "system_instruction": {
@@ -111,48 +154,95 @@ def call_gemini(contents):
                 }
             ]
         },
-        "contents": contents
+        "contents": contents,
     }
 
-    response = requests.post(
-        url,
-        params={
-            "key": GEMINI_API_KEY
-        },
-        headers={
-            "Content-Type": "application/json"
-        },
-        json=payload,
-        timeout=30
-    )
+    last_error = None
 
-    try:
-        data = response.json()
-    except ValueError:
-        data = {}
+    for model in gemini_model_candidates():
+        url = (
+            "https://generativelanguage.googleapis.com/"
+            f"{GEMINI_API_VERSION}/models/"
+            f"{model}:generateContent"
+        )
 
-    if not response.ok:
-        error = data.get("error", {})
-        error_message = error.get(
+        try:
+            response = requests.post(
+                url,
+                params={
+                    "key": GEMINI_API_KEY
+                },
+                headers={
+                    "Content-Type": "application/json"
+                },
+                json=payload,
+                timeout=45,
+            )
+        except requests.RequestException as error:
+            raise RuntimeError(
+                f"Không kết nối được Gemini: {error}"
+            ) from error
+
+        try:
+            data = response.json()
+        except ValueError:
+            data = {}
+
+        if response.ok:
+            try:
+                return data[
+                    "candidates"
+                ][0][
+                    "content"
+                ][
+                    "parts"
+                ][0]["text"]
+
+            except (
+                KeyError,
+                IndexError,
+                TypeError,
+            ) as error:
+                feedback = data.get(
+                    "promptFeedback",
+                    data,
+                )
+
+                raise RuntimeError(
+                    "Gemini trả về dữ liệu không hợp lệ: "
+                    f"{feedback}"
+                ) from error
+
+        error_data = data.get(
+            "error",
+            {},
+        )
+
+        message = error_data.get(
             "message",
-            response.text
-        )
+            response.text,
+        ).strip()
 
-        raise RuntimeError(
+        last_error = (
             f"Gemini HTTP {response.status_code} "
-            f"với model {GEMINI_MODEL}: {error_message}"
+            f"với model {model}: {message}"
         )
 
-    try:
-        return data["candidates"][0]["content"]["parts"][0]["text"]
-    except (
-        KeyError,
-        IndexError,
-        TypeError
-    ) as error:
-        raise RuntimeError(
-            f"Gemini trả về dữ liệu không hợp lệ: {data}"
-        ) from error
+        # Nếu model không tồn tại thì thử model dự phòng
+        if response.status_code not in (400, 404):
+            break
+
+        message_lower = message.lower()
+
+        if (
+            "model" not in message_lower
+            and "not found" not in message_lower
+        ):
+            break
+
+    raise RuntimeError(
+        last_error or "Gemini không trả về kết quả"
+    )
 
 
 # =========================
@@ -160,33 +250,40 @@ def call_gemini(contents):
 # =========================
 
 def get_anime_gif(action):
+    if action not in VALID_GIF_ACTIONS:
+        action = DEFAULT_GIF_ACTION
+
     try:
         response = requests.get(
             f"https://nekos.best/api/v2/{action}",
-            timeout=10
+            timeout=10,
         )
 
         response.raise_for_status()
 
-        return response.json()["results"][0]["url"]
+        return response.json()[
+            "results"
+        ][0]["url"]
 
     except (
         requests.RequestException,
         KeyError,
         IndexError,
         TypeError,
-        ValueError
+        ValueError,
     ):
         return None
 
 
 # =========================
-# TÁCH TIN NHẮN DISCORD
+# DISCORD MESSAGE HELPERS
 # =========================
 
 def split_discord_message(text, limit=2000):
+    text = (text or "").strip()
+
     if not text:
-        return [""]
+        return ["…"]
 
     return [
         text[index:index + limit]
@@ -194,50 +291,37 @@ def split_discord_message(text, limit=2000):
     ]
 
 
-# =========================
-# KIỂM TRA CÁCH GỌI BOT
-# =========================
-
 def is_triggered(message):
-    """
-    Bot phản hồi khi:
-
-    1. Được @mention.
-    2. Tin nhắn bắt đầu bằng Reimu hoặc Reimu ơi.
-    3. Tin nhắn nằm trong CHAT_CHANNEL_ID nếu đã cài đặt.
-    """
-
+    # Khi được @mention
     if client.user and client.user.mentioned_in(message):
         return True
 
+    # Khi tin nhắn nằm trong channel được chỉ định
     if (
         CHAT_CHANNEL_ID
         and message.channel.id == CHAT_CHANNEL_ID
     ):
         return True
 
+    # Khi bắt đầu bằng Reimu hoặc Reimu ơi
     return bool(
         re.match(
             r"^\s*reimu(?:\s+ơi)?"
             r"(?:\s*[,!:：-])?(?:\s|$)",
-            message.content,
-            flags=re.IGNORECASE
+            message.content or "",
+            flags=re.IGNORECASE,
         )
     )
 
 
 def extract_user_text(message):
-    """
-    Xóa @mention hoặc chữ Reimu ở đầu tin nhắn.
-    """
-
-    text = message.content
+    text = message.content or ""
 
     if client.user:
         text = re.sub(
             rf"<@!?{client.user.id}>",
             "",
-            text
+            text,
         )
 
     text = re.sub(
@@ -245,7 +329,7 @@ def extract_user_text(message):
         r"(?:\s*[,!:：-])?\s*",
         "",
         text,
-        flags=re.IGNORECASE
+        flags=re.IGNORECASE,
     )
 
     if not text.strip():
@@ -254,16 +338,12 @@ def extract_user_text(message):
     return text.strip()
 
 
-# =========================
-# TẠO NGỮ CẢNH HỘI THOẠI
-# =========================
-
 def build_contents(message, user_text):
     channel_id = message.channel.id
 
     history = conversation_history.get(
         channel_id,
-        []
+        [],
     )
 
     contents = list(
@@ -280,7 +360,7 @@ def build_contents(message, user_text):
                         f"{user_text}"
                     )
                 }
-            ]
+            ],
         }
     )
 
@@ -290,13 +370,13 @@ def build_contents(message, user_text):
 def save_conversation(
     message,
     user_text,
-    bot_reply
+    bot_reply,
 ):
     channel_id = message.channel.id
 
     history = conversation_history.setdefault(
         channel_id,
-        []
+        [],
     )
 
     history.extend(
@@ -310,7 +390,7 @@ def save_conversation(
                             f"{user_text}"
                         )
                     }
-                ]
+                ],
             },
             {
                 "role": "model",
@@ -318,8 +398,8 @@ def save_conversation(
                     {
                         "text": bot_reply
                     }
-                ]
-            }
+                ],
+            },
         ]
     )
 
@@ -328,8 +408,33 @@ def save_conversation(
     )
 
 
+def split_reply_and_gif(reply):
+    gif_match = re.search(
+        r"\[GIF:\s*([a-zA-Z]+)\s*\]",
+        reply or "",
+    )
+
+    action = DEFAULT_GIF_ACTION
+
+    if gif_match:
+        requested_action = (
+            gif_match.group(1).lower()
+        )
+
+        if requested_action in VALID_GIF_ACTIONS:
+            action = requested_action
+
+        reply = reply.replace(
+            gif_match.group(0),
+            "",
+            1,
+        ).strip()
+
+    return reply, action
+
+
 # =========================
-# KIỂM TRA TOKEN
+# KHỞI TẠO DISCORD BOT
 # =========================
 
 if not DISCORD_TOKEN:
@@ -338,14 +443,11 @@ if not DISCORD_TOKEN:
     )
 
 
-# =========================
-# KHỞI TẠO DISCORD BOT
-# =========================
-
 intents = discord.Intents.default()
 
-# Bắt buộc để bot đọc nội dung tin nhắn
+# Bắt buộc phải bật thêm trong Discord Developer Portal
 intents.message_content = True
+
 
 client = discord.Client(
     intents=intents
@@ -355,27 +457,34 @@ client = discord.Client(
 @client.event
 async def on_ready():
     print(
-        f"Miko {client.user} đã sẵn sàng nhận tiền công đức!"
-    )
-
-    print(
-        f"Đang dùng Gemini model: {GEMINI_MODEL}"
-    )
-
-    print(
-        "Có thể gọi bot bằng @mention "
-        "hoặc bắt đầu tin nhắn bằng 'Reimu'."
-    )
-
-    print(
-        "Bot sẽ tự gửi GIF sau mỗi câu trả lời."
+        f"Miko {client.user} đã sẵn sàng "
+        f"| model={GEMINI_MODEL}",
+        flush=True,
     )
 
     if CHAT_CHANNEL_ID:
         print(
-            f"Tự động trả lời trong channel ID: "
-            f"{CHAT_CHANNEL_ID}"
+            f"Auto-reply channel: "
+            f"{CHAT_CHANNEL_ID}",
+            flush=True,
         )
+
+
+@client.event
+async def on_resumed():
+    print(
+        "Discord Gateway đã kết nối lại.",
+        flush=True,
+    )
+
+
+@client.event
+async def on_disconnect():
+    print(
+        "Discord Gateway bị ngắt; "
+        "discord.py sẽ tự kết nối lại.",
+        flush=True,
+    )
 
 
 # =========================
@@ -384,87 +493,102 @@ async def on_ready():
 
 @client.event
 async def on_message(message):
-    # Không trả lời chính mình
-    if message.author == client.user:
+    # Không trả lời bot khác để tránh vòng lặp
+    if message.author.bot:
         return
 
     # Không đúng điều kiện gọi bot thì bỏ qua
     if not is_triggered(message):
         return
 
-    user_text = extract_user_text(message)
-
-    contents = build_contents(
-        message,
-        user_text
+    # Mỗi channel xử lý tuần tự
+    lock = channel_locks.setdefault(
+        message.channel.id,
+        asyncio.Lock(),
     )
 
-    async with message.channel.typing():
+    async with lock:
         try:
-            # Gọi Gemini ngoài event loop
-            # để Discord không bị đứng nếu API phản hồi chậm.
-            bot_reply = await asyncio.to_thread(
-                call_gemini,
-                contents
+            user_text = extract_user_text(
+                message
             )
 
-            save_conversation(
+            contents = build_contents(
                 message,
                 user_text,
-                bot_reply
             )
 
-            gif_match = re.search(
-                r"\[GIF:(.*?)\]",
-                bot_reply
-            )
-
-            if gif_match:
-                # Dùng GIF do Gemini lựa chọn
-                action = gif_match.group(
-                    1
-                ).strip().lower()
-
-                bot_reply = bot_reply.replace(
-                    gif_match.group(0),
-                    ""
-                ).strip()
-            else:
-                # Nếu Gemini không chọn GIF,
-                # dùng GIF mặc định là smile.
-                action = DEFAULT_GIF_ACTION
-
-            gif_url = await asyncio.to_thread(
-                get_anime_gif,
-                action
-            )
-
-            # Gửi câu trả lời
-            for chunk in split_discord_message(
-                bot_reply
-            ):
-                await message.reply(chunk)
-
-            # Gửi GIF sau câu trả lời
-            if gif_url:
-                await message.channel.send(
-                    gif_url
+            async with message.channel.typing():
+                raw_reply = await asyncio.to_thread(
+                    call_gemini,
+                    contents,
                 )
 
+                bot_reply, gif_action = (
+                    split_reply_and_gif(
+                        raw_reply
+                    )
+                )
+
+                save_conversation(
+                    message,
+                    user_text,
+                    bot_reply,
+                )
+
+                for chunk in split_discord_message(
+                    bot_reply
+                ):
+                    await message.reply(
+                        chunk,
+                        mention_author=False,
+                    )
+
+                gif_url = await asyncio.to_thread(
+                    get_anime_gif,
+                    gif_action,
+                )
+
+                if gif_url:
+                    await message.channel.send(
+                        gif_url
+                    )
+
         except Exception as error:
-            print(
-                f"Lỗi: {error}"
+            logging.exception(
+                "Lỗi xử lý tin nhắn Discord"
             )
 
-            await message.reply(
-                "Đang bận quét lá ở đền! "
-                f"Mã lỗi: `{error}`"
-            )
+            try:
+                await message.reply(
+                    "Đang bận quét lá ở đền! "
+                    f"Mã lỗi: `{str(error)[:500]}`",
+                    mention_author=False,
+                )
+
+            except discord.DiscordException:
+                logging.exception(
+                    "Không gửi được thông báo lỗi lên Discord"
+                )
 
 
 # =========================
 # CHẠY BOT
 # =========================
 
+logging.basicConfig(
+    level=logging.INFO,
+    format=(
+        "%(asctime)s "
+        "%(levelname)s "
+        "%(name)s: "
+        "%(message)s"
+    ),
+)
+
 keep_alive()
-client.run(DISCORD_TOKEN)
+
+client.run(
+    DISCORD_TOKEN,
+    log_handler=None,
+)
