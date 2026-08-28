@@ -22,7 +22,6 @@ def home():
 
 
 def run_health_server():
-    # Render cung cấp PORT qua biến môi trường.
     port = int(os.getenv("PORT", "10000"))
 
     app.run(
@@ -48,7 +47,7 @@ def keep_alive():
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-# Model hiện tại mà API của bạn yêu cầu
+# Model Gemini hiện tại
 GEMINI_MODEL = os.getenv(
     "GEMINI_MODEL",
     "gemini-3.6-flash",
@@ -59,8 +58,22 @@ GEMINI_API_VERSION = os.getenv(
     "v1beta",
 )
 
-MAX_HISTORY_MESSAGES = 12
+# Giảm số tin nhắn lịch sử để Gemini phản hồi nhanh hơn
+MAX_HISTORY_MESSAGES = 8
+
 DEFAULT_GIF_ACTION = "smile"
+
+# Đặt ENABLE_GIF=false trên Render nếu muốn nhanh hơn nữa
+ENABLE_GIF = os.getenv(
+    "ENABLE_GIF",
+    "true",
+).lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+
 
 try:
     CHAT_CHANNEL_ID = int(
@@ -136,9 +149,8 @@ channel_locks = {}
 
 def gemini_model_candidates():
     """
-    Thử model đang cấu hình trước.
-    Nếu biến môi trường đang còn model cũ,
-    sẽ chuyển sang gemini-3.6-flash.
+    Nếu Render còn đặt GEMINI_MODEL cũ,
+    bot sẽ tự thử lại bằng gemini-3.6-flash.
     """
 
     models = [
@@ -146,7 +158,6 @@ def gemini_model_candidates():
         "gemini-3.6-flash",
     ]
 
-    # Xóa model bị trùng
     return list(dict.fromkeys(models))
 
 
@@ -186,7 +197,7 @@ def call_gemini(contents):
                     "Content-Type": "application/json"
                 },
                 json=payload,
-                timeout=45,
+                timeout=25,
             )
 
         except requests.RequestException as error:
@@ -240,7 +251,7 @@ def call_gemini(contents):
             f"với model {model}: {message}"
         )
 
-        # Nếu model không tồn tại thì thử model 3.6
+        # Chỉ thử model khác nếu lỗi là model không tồn tại
         if response.status_code not in (400, 404):
             break
 
@@ -284,7 +295,7 @@ def get_anime_gif(action):
         TypeError,
         ValueError,
     ):
-        # GIF lỗi thì bot vẫn trả lời bình thường
+        # GIF lỗi thì bot vẫn hoạt động bình thường
         return None
 
 
@@ -316,7 +327,7 @@ def is_triggered(message):
     ):
         return True
 
-    # Khi tin nhắn bắt đầu bằng "Reimu"
+    # Khi bắt đầu bằng Reimu hoặc Reimu ơi
     return bool(
         re.match(
             r"^\s*reimu(?:\s+ơi)?"
@@ -448,6 +459,27 @@ def split_reply_and_gif(reply):
     return reply, action
 
 
+async def send_gif_later(channel, action):
+    """
+    Gửi GIF ở background.
+    Người dùng không phải chờ GIF mới nhận được câu trả lời.
+    """
+
+    try:
+        gif_url = await asyncio.to_thread(
+            get_anime_gif,
+            action,
+        )
+
+        if gif_url:
+            await channel.send(gif_url)
+
+    except discord.DiscordException:
+        logging.exception(
+            "Không gửi được GIF lên Discord"
+        )
+
+
 # =========================
 # KHỞI TẠO DISCORD BOT
 # =========================
@@ -460,7 +492,7 @@ if not DISCORD_TOKEN:
 
 intents = discord.Intents.default()
 
-# Phải bật thêm Message Content Intent
+# Phải bật Message Content Intent
 # trong Discord Developer Portal
 intents.message_content = True
 
@@ -534,6 +566,7 @@ async def on_message(message):
                 user_text,
             )
 
+            # Chỉ hiện typing khi đang chờ Gemini
             async with message.channel.typing():
                 raw_reply = await asyncio.to_thread(
                     call_gemini,
@@ -546,31 +579,30 @@ async def on_message(message):
                     )
                 )
 
-                save_conversation(
-                    message,
-                    user_text,
-                    bot_reply,
+            # Lưu lịch sử sau khi Gemini trả lời
+            save_conversation(
+                message,
+                user_text,
+                bot_reply,
+            )
+
+            # Gửi câu trả lời ngay
+            for chunk in split_discord_message(
+                bot_reply
+            ):
+                await message.reply(
+                    chunk,
+                    mention_author=False,
                 )
 
-                # Gửi nội dung trả lời
-                for chunk in split_discord_message(
-                    bot_reply
-                ):
-                    await message.reply(
-                        chunk,
-                        mention_author=False,
+            # GIF chạy nền, không làm chậm câu trả lời
+            if ENABLE_GIF:
+                asyncio.create_task(
+                    send_gif_later(
+                        message.channel,
+                        gif_action,
                     )
-
-                # Lấy và gửi GIF
-                gif_url = await asyncio.to_thread(
-                    get_anime_gif,
-                    gif_action,
                 )
-
-                if gif_url:
-                    await message.channel.send(
-                        gif_url
-                    )
 
         except Exception as error:
             logging.exception(
