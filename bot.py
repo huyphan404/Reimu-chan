@@ -22,7 +22,9 @@ def home():
 
 
 def run_health_server():
+    # Render cung cấp PORT qua biến môi trường.
     port = int(os.getenv("PORT", "10000"))
+
     app.run(
         host="0.0.0.0",
         port=port,
@@ -46,10 +48,10 @@ def keep_alive():
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-# Có thể ghi đè bằng biến môi trường GEMINI_MODEL
+# Model hiện tại mà API của bạn yêu cầu
 GEMINI_MODEL = os.getenv(
     "GEMINI_MODEL",
-    "gemini-2.5-flash",
+    "gemini-3.6-flash",
 )
 
 GEMINI_API_VERSION = os.getenv(
@@ -64,10 +66,13 @@ try:
     CHAT_CHANNEL_ID = int(
         os.getenv("CHAT_CHANNEL_ID", "0") or "0"
     )
+
 except ValueError:
     CHAT_CHANNEL_ID = 0
+
     logging.warning(
-        "CHAT_CHANNEL_ID không hợp lệ; bot chỉ trả lời khi được gọi."
+        "CHAT_CHANNEL_ID không hợp lệ; "
+        "bot chỉ trả lời khi được gọi."
     )
 
 
@@ -130,13 +135,18 @@ channel_locks = {}
 # =========================
 
 def gemini_model_candidates():
+    """
+    Thử model đang cấu hình trước.
+    Nếu biến môi trường đang còn model cũ,
+    sẽ chuyển sang gemini-3.6-flash.
+    """
+
     models = [
         GEMINI_MODEL,
-        "gemini-2.5-flash",
-        "gemini-2.0-flash",
+        "gemini-3.6-flash",
     ]
 
-    # Xóa model trùng nhau nhưng vẫn giữ thứ tự
+    # Xóa model bị trùng
     return list(dict.fromkeys(models))
 
 
@@ -178,6 +188,7 @@ def call_gemini(contents):
                 json=payload,
                 timeout=45,
             )
+
         except requests.RequestException as error:
             raise RuntimeError(
                 f"Không kết nối được Gemini: {error}"
@@ -185,6 +196,7 @@ def call_gemini(contents):
 
         try:
             data = response.json()
+
         except ValueError:
             data = {}
 
@@ -228,7 +240,7 @@ def call_gemini(contents):
             f"với model {model}: {message}"
         )
 
-        # Nếu model không tồn tại thì thử model dự phòng
+        # Nếu model không tồn tại thì thử model 3.6
         if response.status_code not in (400, 404):
             break
 
@@ -272,6 +284,7 @@ def get_anime_gif(action):
         TypeError,
         ValueError,
     ):
+        # GIF lỗi thì bot vẫn trả lời bình thường
         return None
 
 
@@ -296,14 +309,14 @@ def is_triggered(message):
     if client.user and client.user.mentioned_in(message):
         return True
 
-    # Khi tin nhắn nằm trong channel được chỉ định
+    # Khi tin nhắn nằm trong channel được cài đặt
     if (
         CHAT_CHANNEL_ID
         and message.channel.id == CHAT_CHANNEL_ID
     ):
         return True
 
-    # Khi bắt đầu bằng Reimu hoặc Reimu ơi
+    # Khi tin nhắn bắt đầu bằng "Reimu"
     return bool(
         re.match(
             r"^\s*reimu(?:\s+ơi)?"
@@ -317,6 +330,7 @@ def is_triggered(message):
 def extract_user_text(message):
     text = message.content or ""
 
+    # Xóa @mention của bot
     if client.user:
         text = re.sub(
             rf"<@!?{client.user.id}>",
@@ -324,6 +338,7 @@ def extract_user_text(message):
             text,
         )
 
+    # Xóa chữ Reimu ở đầu tin nhắn
     text = re.sub(
         r"^\s*reimu(?:\s+ơi)?"
         r"(?:\s*[,!:：-])?\s*",
@@ -445,7 +460,8 @@ if not DISCORD_TOKEN:
 
 intents = discord.Intents.default()
 
-# Bắt buộc phải bật thêm trong Discord Developer Portal
+# Phải bật thêm Message Content Intent
+# trong Discord Developer Portal
 intents.message_content = True
 
 
@@ -493,15 +509,15 @@ async def on_disconnect():
 
 @client.event
 async def on_message(message):
-    # Không trả lời bot khác để tránh vòng lặp
+    # Không trả lời bot khác
     if message.author.bot:
         return
 
-    # Không đúng điều kiện gọi bot thì bỏ qua
+    # Không đúng điều kiện gọi bot
     if not is_triggered(message):
         return
 
-    # Mỗi channel xử lý tuần tự
+    # Xử lý từng channel tuần tự
     lock = channel_locks.setdefault(
         message.channel.id,
         asyncio.Lock(),
@@ -536,6 +552,7 @@ async def on_message(message):
                     bot_reply,
                 )
 
+                # Gửi nội dung trả lời
                 for chunk in split_discord_message(
                     bot_reply
                 ):
@@ -544,6 +561,7 @@ async def on_message(message):
                         mention_author=False,
                     )
 
+                # Lấy và gửi GIF
                 gif_url = await asyncio.to_thread(
                     get_anime_gif,
                     gif_action,
@@ -586,7 +604,9 @@ logging.basicConfig(
     ),
 )
 
+
 keep_alive()
+
 
 client.run(
     DISCORD_TOKEN,
