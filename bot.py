@@ -12,7 +12,7 @@ import aiohttp
 from flask import Flask
 
 # =========================
-# HEALTH CHECK CHO DEPLOY
+# HEALTH CHECK
 # =========================
 app = Flask(__name__)
 
@@ -33,10 +33,8 @@ def keep_alive():
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-# Lấy cấu hình bạn vừa nhập
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-# Bỏ dấu gạch chéo ở cuối URL (nếu có lỡ nhập thừa) để tránh lỗi API
-OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip('/')
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip()
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").strip().rstrip('/')
 
 MAX_HISTORY_MESSAGES = 8
 
@@ -74,7 +72,6 @@ async def call_openai_stream(messages):
         "Authorization": f"Bearer {OPENAI_API_KEY}"
     }
     
-    # Ở OpenRouter, bắt buộc phải có mục này nếu dùng bản free
     if "openrouter" in OPENAI_BASE_URL:
         headers["HTTP-Referer"] = "https://discord.com"
         headers["X-Title"] = "Reimu Discord Bot"
@@ -102,7 +99,6 @@ async def call_openai_stream(messages):
                     raw_text = await response.text()
                     raise RuntimeError(f"Lỗi hệ thống ({response.status}): {raw_text}")
 
-                # Nhận dữ liệu stream
                 async for raw_line in response.content:
                     if not raw_line: continue
                     
@@ -152,10 +148,8 @@ def build_openai_messages(message, user_text):
     history = conversation_history.get(channel_id, [])
     
     messages = [{"role": "system", "content": SYSTEM_INSTRUCTION}]
-    
     for msg in history[-MAX_HISTORY_MESSAGES:]:
         messages.append(msg)
-        
     messages.append({"role": "user", "content": f"{message.author.display_name}: {user_text}"})
     return messages
 
@@ -177,7 +171,11 @@ client = discord.Client(intents=intents)
 
 @client.event
 async def on_ready():
-    print(f"Miko {client.user} đã sẵn sàng (Model: {OPENAI_MODEL})!", flush=True)
+    print(f"=====================================")
+    print(f"Miko {client.user} đã sẵn sàng!")
+    print(f"-> ĐANG DÙNG URL: {OPENAI_BASE_URL}")
+    print(f"-> ĐANG DÙNG MODEL: {OPENAI_MODEL}")
+    print(f"=====================================", flush=True)
 
 # =========================
 # XỬ LÝ TIN NHẮN 
@@ -234,7 +232,7 @@ async def on_message(message):
                 err_msg = "*(Quá tải mạng lưới một chút, đợi ta vài giây rồi gọi lại nhé!)*"
             else:
                 logging.error(f"Lỗi: {err_str}")
-                err_msg = f"*(Lỗi hệ thống, kiểm tra lại API Key hoặc Model)*: `{err_str[:200]}`"
+                err_msg = f"*(Lỗi hệ thống - Check lại URL và Model)*: `{err_str[:200]}`"
 
             try:
                 if 'reply_message' in locals() and reply_message:
