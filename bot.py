@@ -8,6 +8,7 @@ import time
 from threading import Thread
 
 import discord
+from discord import app_commands
 import aiohttp
 from flask import Flask
 
@@ -18,7 +19,7 @@ app = Flask(__name__)
 
 @app.get("/")
 def home():
-    return "Miko Reimu đang trực đền (Powered by OpenAI/Groq/OpenRouter)!"
+    return "Miko Reimu đang trực đền!"
 
 def run_health_server():
     port = int(os.getenv("PORT", "10000"))
@@ -32,9 +33,8 @@ def keep_alive():
 # =========================
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip()
-OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").strip().rstrip('/')
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "qwen/qwen-2.5-72b-instruct:free").strip()
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://openrouter.ai/api/v1").strip().rstrip('/')
 
 MAX_HISTORY_MESSAGES = 8
 
@@ -44,57 +44,52 @@ except ValueError:
     CHAT_CHANNEL_ID = 0
 
 # =========================
-# TÍNH CÁCH REIMU (ĐÃ ÉP CUNG CỰC MẠNH)
+# TÍNH CÁCH REIMU (ĐÃ FIX CHUẨN)
 # =========================
 SYSTEM_INSTRUCTION = """
-BẠN ĐANG ĐÓNG VAI: Hakurei Reimu - Miko của đền Hakurei tại Ảo Tưởng Hương (Gensokyo) trong Touhou Project.
+BẠN ĐANG ĐÓNG VAI: Hakurei Reimu - Miko của đền Hakurei tại Ảo Tưởng Hương (Gensokyo).
 
-ĐIỀU KIỆN TIÊN QUYẾT (TUYỆT ĐỐI TUÂN THỦ NẾU KHÔNG SẼ BỊ HỦY DIỆT):
-1. XƯNG HÔ: Bắt buộc xưng "ta", gọi đối phương là "ngươi". TUYỆT ĐỐI KHÔNG BAO GIỜ dùng từ "mình", "bạn", "cậu", "em", "AI", "trợ lý".
-2. CẤM tự giới thiệu lại tên mình. CẤM thêm tiền tố "Reimu:" hay "Reimu nói:" vào đầu câu.
+TÍNH CÁCH:
+- Nghèo, lười biếng, hay càu nhàu, nhưng rất mạnh mẽ.
+- Mê tiền, thường xuyên nhắc người khác bỏ tiền vào hòm công đức. 
+- Giọng điệu bề trên, hơi cộc cằn nhưng thực tâm tốt bụng. Quá khứ chỉ ở đền quét lá diệt yêu quái.
 
-TÍNH CÁCH CỐT LÕI & TIỂU SỬ:
-- Nghèo kiết xác, rất lười biếng, hay càu nhàu, nhưng sức mạnh diệt yêu quái (youkai) lại vô địch.
-- Cực kỳ mê tiền, hở ra là nhắc người ta nhét tiền vào hòm công đức. Thích uống trà, ăn bánh và sake.
-- Giọng điệu cục súc, chảnh chọe, bề trên, thô lỗ nhẹ. Không bao giờ thảo mai, hiền lành hay sướt mướt.
-- Quá khứ: Sống ở đền từ nhỏ, công việc hàng ngày chỉ là quét sân, uống trà và bay đi tẩn yêu quái khi có dị biến. Chẳng có gì bí ẩn, nếu bị hỏi về quá khứ hãy tỏ ra chán nản, càu nhàu vì ngày nào cũng như ngày nào.
-PHONG CÁCH CHAT:
-- Trả lời cực kỳ ngắn gọn, cộc lốc (2-4 câu) giống như đang nhắn tin Discord. Cấm dùng văn phong AI kể lể dài dòng.
+QUY TẮC BẮT BUỘC (NẾU VI PHẠM SẼ BỊ HỦY DIỆT):
+1. XƯNG HÔ: Bắt buộc xưng "ta", gọi đối phương là "ngươi", "nhà ngươi" hoặc "khách". 
+2. TUYỆT ĐỐI KHÔNG BAO GIỜ xưng "mình", "tôi", "em" và KHÔNG BAO GIỜ gọi đối phương là "bạn", "cậu".
+3. Trả lời cực kỳ ngắn gọn (1-3 câu), đi thẳng vào vấn đề. KHÔNG giải thích dông dài. KHÔNG lặp lại lời người khác.
+4. KHÔNG bao giờ tự xưng tên ở đầu câu (Ví dụ: cấm viết "Reimu: ...").
 """
 
 conversation_history = {}
 channel_locks = {}
 
 # =========================
-# GỌI API (STREAMING CHỮ TỪNG DÒNG)
+# GỌI API (CÓ THUỐC CHỐNG LẶP TỪ)
 # =========================
 async def call_openai_stream(messages):
-    if not OPENAI_API_KEY:
-        raise RuntimeError("Thiếu biến môi trường OPENAI_API_KEY!")
-
     url = f"{OPENAI_BASE_URL}/chat/completions"
     headers = {
         "Content-Type": "application/json",
-        "Authorization": f"Bearer {OPENAI_API_KEY}"
+        "Authorization": f"Bearer {OPENAI_API_KEY}",
+        "HTTP-Referer": "https://discord.com",
+        "X-Title": "Reimu Discord Bot"
     }
-    
-    if "openrouter" in OPENAI_BASE_URL:
-        headers["HTTP-Referer"] = "https://discord.com"
-        headers["X-Title"] = "Reimu Discord Bot"
 
     payload = {
         "model": OPENAI_MODEL,
         "messages": messages,
-        "stream": True
+        "stream": True,
+        "temperature": 0.7,
+        "frequency_penalty": 1.0, # Thuốc đặc trị: Ép AI không được nói lặp từ
+        "max_tokens": 400
     }
 
     connector = aiohttp.TCPConnector(family=socket.AF_INET)
     async with aiohttp.ClientSession(connector=connector) as session:
         try:
             async with session.post(
-                url,
-                headers=headers,
-                json=payload,
+                url, headers=headers, json=payload,
                 timeout=aiohttp.ClientTimeout(sock_connect=10, sock_read=60)
             ) as response:
                 
@@ -107,10 +102,8 @@ async def call_openai_stream(messages):
 
                 async for raw_line in response.content:
                     if not raw_line: continue
-                    
                     line = raw_line.decode('utf-8').strip()
                     if not line.startswith("data:"): continue
-                    
                     raw_data = line[5:].strip()
                     if raw_data == "[DONE]": break
 
@@ -129,10 +122,9 @@ async def call_openai_stream(messages):
             raise RuntimeError(f"Lỗi mạng: {error}")
 
 # =========================
-# DISCORD MESSAGE HELPERS
+# LỊCH SỬ & TIN NHẮN
 # =========================
 def split_discord_message(text, limit=2000):
-    text = (text or "").strip()
     return [text[i:i + limit] for i in range(0, max(1, len(text)), limit)]
 
 def is_triggered(message):
@@ -144,15 +136,13 @@ def is_triggered(message):
 
 def extract_user_text(message):
     text = message.content or ""
-    if client.user:
-        text = re.sub(rf"<@!?{client.user.id}>", "", text)
+    if client.user: text = re.sub(rf"<@!?{client.user.id}>", "", text)
     text = re.sub(r"^\s*reimu(?:\s+ơi)?(?:\s*[,!:：-])?\s*", "", text, flags=re.IGNORECASE)
     return text.strip() or "Ngươi gọi ta có việc gì?"
 
 def build_openai_messages(message, user_text):
     channel_id = message.channel.id
     history = conversation_history.get(channel_id, [])
-    
     messages = [{"role": "system", "content": SYSTEM_INSTRUCTION}]
     for msg in history[-MAX_HISTORY_MESSAGES:]:
         messages.append(msg)
@@ -174,22 +164,39 @@ def save_conversation(message, user_text, bot_reply):
 intents = discord.Intents.default()
 intents.message_content = True
 client = discord.Client(intents=intents)
+tree = app_commands.CommandTree(client)
 
+# =========================
+# LỆNH XÓA TRÍ NHỚ /CLEARMEM
+# =========================
+@tree.command(name="clearmem", description="Xóa trí nhớ của Reimu trong kênh này")
+async def clearmem(interaction: discord.Interaction):
+    channel_id = interaction.channel.id
+    if channel_id in conversation_history:
+        conversation_history[channel_id] = []
+    await interaction.response.send_message("Hả? Vừa nãy ta với ngươi nói gì cơ? Trí nhớ ta trống rỗng rồi... (Đã xóa lịch sử chat 🧹)")
+
+# =========================
+# EVENT READY
+# =========================
 @client.event
 async def on_ready():
     print(f"=====================================")
     print(f"Miko {client.user} đã sẵn sàng!")
-    print(f"-> ĐANG DÙNG URL: {OPENAI_BASE_URL}")
     print(f"-> ĐANG DÙNG MODEL: {OPENAI_MODEL}")
     print(f"=====================================", flush=True)
+    try:
+        synced = await tree.sync()
+        print(f"Đã đồng bộ {len(synced)} lệnh (/) thành công!")
+    except Exception as e:
+        print(f"Lỗi đồng bộ lệnh: {e}")
 
 # =========================
-# XỬ LÝ TIN NHẮN 
+# XỬ LÝ CHAT
 # =========================
 @client.event
 async def on_message(message):
-    if message.author.bot or not is_triggered(message):
-        return
+    if message.author.bot or not is_triggered(message): return
 
     lock = channel_locks.setdefault(message.channel.id, asyncio.Lock())
     async with lock:
@@ -206,16 +213,13 @@ async def on_message(message):
                 async for chunk in call_openai_stream(messages):
                     bot_reply += chunk
                     now = time.time()
-                    
                     if now - last_edit_time > edit_interval and len(bot_reply) < 1950:
                         display_text = bot_reply + " ✍️"
                         if not reply_message:
                             reply_message = await message.reply(display_text, mention_author=False)
                         else:
-                            try:
-                                await reply_message.edit(content=display_text)
-                            except discord.DiscordException:
-                                pass
+                            try: await reply_message.edit(content=display_text)
+                            except discord.DiscordException: pass
                         last_edit_time = now
 
             bot_reply = bot_reply.strip()
@@ -237,21 +241,14 @@ async def on_message(message):
             if "RATE_LIMIT" in err_str:
                 err_msg = "*(Quá tải mạng lưới một chút, đợi ta vài giây rồi gọi lại nhé!)*"
             else:
-                logging.error(f"Lỗi: {err_str}")
-                err_msg = f"*(Lỗi hệ thống - Check lại URL và Model)*: `{err_str[:200]}`"
+                err_msg = f"*(Lỗi hệ thống)*: `{err_str[:200]}`"
 
             try:
                 if 'reply_message' in locals() and reply_message:
                     await reply_message.edit(content=err_msg)
                 else:
                     await message.reply(err_msg, mention_author=False)
-            except discord.DiscordException:
-                pass
-
-# =========================
-# CHẠY BOT
-# =========================
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
+            except discord.DiscordException: pass
 
 if __name__ == "__main__":
     keep_alive()
