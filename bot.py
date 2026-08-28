@@ -8,6 +8,7 @@ import time
 from threading import Thread
 
 import discord
+from discord import app_commands # Import module để làm Slash Command
 import aiohttp
 from flask import Flask
 
@@ -92,7 +93,6 @@ async def call_gemini_stream(contents):
     }
     
     last_error = None
-
     connector = aiohttp.TCPConnector(family=socket.AF_INET)
     
     async with aiohttp.ClientSession(connector=connector) as session:
@@ -215,16 +215,25 @@ def save_conversation(message, user_text, bot_reply):
 
 
 # =========================
-# KHỞI TẠO DISCORD BOT
+# KHỞI TẠO DISCORD BOT & SLASH COMMANDS
 # =========================
 
 if not DISCORD_TOKEN:
     raise RuntimeError("Thiếu biến môi trường DISCORD_TOKEN")
 
-intents = discord.Intents.default()
-intents.message_content = True
-client = discord.Client(intents=intents)
+# Kế thừa class Client để thêm CommandTree (cấu trúc để làm slash command)
+class ReimuBot(discord.Client):
+    def __init__(self):
+        intents = discord.Intents.default()
+        intents.message_content = True
+        super().__init__(intents=intents)
+        self.tree = app_commands.CommandTree(self)
 
+    async def setup_hook(self):
+        # Đồng bộ hóa các lệnh gạch chéo (Slash Commands) lên Discord
+        await self.tree.sync()
+
+client = ReimuBot()
 
 @client.event
 async def on_ready():
@@ -232,11 +241,9 @@ async def on_ready():
     if CHAT_CHANNEL_ID:
         print(f"Auto-reply channel: {CHAT_CHANNEL_ID}", flush=True)
 
-
 @client.event
 async def on_resumed():
     print("Discord Gateway đã kết nối lại.", flush=True)
-
 
 @client.event
 async def on_disconnect():
@@ -244,7 +251,21 @@ async def on_disconnect():
 
 
 # =========================
-# XỬ LÝ TIN NHẮN
+# ĐĂNG KÝ SLASH COMMANDS
+# =========================
+
+@client.tree.command(name="clear", description="Xóa trí nhớ của Reimu trong kênh này")
+async def clear_memory_slash(interaction: discord.Interaction):
+    channel_id = interaction.channel.id
+    if channel_id in conversation_history:
+        conversation_history.pop(channel_id)
+        
+    # Gửi phản hồi lại người dùng (chỉ người dùng mới thấy hoặc mọi người đều thấy tùy ý)
+    await interaction.response.send_message("Cái gì cơ? Ngươi vừa nói gì ta chả nhớ gì cả. Chắc do ta buồn ngủ quá...")
+
+
+# =========================
+# XỬ LÝ TIN NHẮN BÌNH THƯỜNG
 # =========================
 
 @client.event
@@ -254,7 +275,7 @@ async def on_message(message):
     if not is_triggered(message):
         return
 
-    # --- TÍNH NĂNG XÓA TRÍ NHỚ ---
+    # Mình vẫn giữ lại lệnh ẩn chat bình thường "reimu clear" phòng hờ
     user_text = extract_user_text(message)
     user_text_lower = user_text.lower()
     
