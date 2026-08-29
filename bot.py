@@ -41,19 +41,23 @@ try: CHAT_CHANNEL_ID = int(os.getenv("CHAT_CHANNEL_ID", "0") or "0")
 except ValueError: CHAT_CHANNEL_ID = 0
 
 # =========================
-# TÍNH CÁCH REIMU
+# TÍNH CÁCH REIMU (ĐÃ CHỮA BỆNH SỢ HÃI)
 # =========================
 SYSTEM_INSTRUCTION = """
-BẠN ĐANG ĐÓNG VAI: Hakurei Reimu - Miko của đền Hakurei.
+ĐÓNG VAI: Hakurei Reimu (Miko đền Hakurei). Hãy trả lời trực tiếp bằng Tiếng Việt.
 
 TÍNH CÁCH:
-- Nghèo, lười, hay càu nhàu nhưng cực kỳ mạnh mẽ. Rất mê tiền.
+- Nghèo, lười, hay càu nhàu, rất mê tiền công đức. Cộc lốc nhưng tốt bụng.
 
-QUY TẮC BẮT BUỘC (NẾU VI PHẠM SẼ BỊ HỦY DIỆT):
-1. Bắt buộc xưng "ta", gọi đối phương là "ngươi", "khách". 
-2. TUYỆT ĐỐI KHÔNG xưng "mình", "tôi", "em". KHÔNG gọi đối phương là "bạn", "cậu".
-3. KHÔNG BAO GIỜ tự xưng tên ở đầu câu (cấm viết "Reimu:").
-4. Trả lời thẳng vào vấn đề, cộc lốc, không dài dòng.
+QUY TẮC XƯNG HÔ (BẮT BUỘC):
+- Luôn xưng "ta", gọi đối phương là "ngươi" hoặc "khách".
+- KHÔNG BAO GIỜ dùng "mình", "tôi", "em", "bạn", "cậu".
+
+ĐỊNH DẠNG ĐẦU RA (LUẬT THÉP):
+1. CHỈ IN RA LỜI THOẠI CỦA REIMU. 
+2. CẤM TUYỆT ĐỐI VIỆC SUY NGHĨ THÀNH TIẾNG. Không được phân tích luật lệ (CẤM viết kiểu "Okay, let's see...", "I need to check...").
+3. KHÔNG tự xưng tên ở đầu câu (Cấm viết "Reimu:").
+4. Trả lời thẳng vào vấn đề, cộc lốc, ngắn gọn 1-3 câu.
 """
 
 conversation_history = {}
@@ -168,7 +172,7 @@ async def on_ready():
     except Exception: pass
 
 # =========================
-# XỬ LÝ CHAT & TÀNG HÌNH SUY NGHĨ
+# XỬ LÝ CHAT
 # =========================
 @client.event
 async def on_message(message):
@@ -189,10 +193,8 @@ async def on_message(message):
                 async for chunk in call_openai_stream(messages):
                     raw_bot_reply += chunk
                     
-                    # Tàng hình phần suy nghĩ <think>...</think> của các model xịn
+                    # Tàng hình thẻ <think> (nếu AI dùng)
                     filtered_reply = re.sub(r'<think>.*?(?:</think>|$)', '', raw_bot_reply, flags=re.DOTALL|re.IGNORECASE).strip()
-                    
-                    # Lọc luôn rác Safety của OpenRouter
                     filtered_reply = re.sub(r'(?i)User Safety:.*', '', filtered_reply).strip()
                     filtered_reply = re.sub(r'(?i)Response Safety:.*', '', filtered_reply).strip()
 
@@ -200,7 +202,6 @@ async def on_message(message):
                     if now - last_edit_time > edit_interval:
                         display_text = filtered_reply
                         
-                        # Nếu nó đang trong lúc suy nghĩ (chưa nhả chữ thật ra)
                         if not display_text:
                             display_text = "*(Đang tính toán tiền công đức...)*"
                             
@@ -214,13 +215,12 @@ async def on_message(message):
                                 except discord.DiscordException: pass
                         last_edit_time = now
 
-            # Xử lý đoạn text cuối cùng sau khi stream xong
             final_reply = re.sub(r'<think>.*?(?:</think>|$)', '', raw_bot_reply, flags=re.DOTALL|re.IGNORECASE).strip()
             final_reply = re.sub(r'(?i)User Safety:.*', '', final_reply).strip()
             final_reply = re.sub(r'(?i)Response Safety:.*', '', final_reply).strip()
 
             if not final_reply:
-                final_reply = "Ngươi vừa lẩm bẩm cái gì cơ? Ta bận quét đền nghe không rõ."
+                final_reply = "Ngươi vừa lẩm bẩm cái gì cơ? Đưa tiền đây rồi ta nói chuyện tiếp."
 
             if final_reply:
                 save_conversation(message, user_text, final_reply)
