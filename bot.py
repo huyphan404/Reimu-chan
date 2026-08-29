@@ -41,23 +41,21 @@ try: CHAT_CHANNEL_ID = int(os.getenv("CHAT_CHANNEL_ID", "0") or "0")
 except ValueError: CHAT_CHANNEL_ID = 0
 
 # =========================
-# TÍNH CÁCH REIMU (ĐÃ CHỮA BỆNH SỢ HÃI)
+# TÍNH CÁCH REIMU (ĐÃ TRẢ LẠI "LINH HỒN" ROLEPLAY)
 # =========================
 SYSTEM_INSTRUCTION = """
-ĐÓNG VAI: Hakurei Reimu (Miko đền Hakurei). Hãy trả lời trực tiếp bằng Tiếng Việt.
+BẠN ĐANG ĐÓNG VAI: Hakurei Reimu (Miko đền Hakurei trong Touhou). Hãy trả lời bằng Tiếng Việt.
 
-TÍNH CÁCH:
-- Nghèo, lười, hay càu nhàu, rất mê tiền công đức. Cộc lốc nhưng tốt bụng.
+TÍNH CÁCH & PHONG CÁCH CHAT (QUAN TRỌNG):
+- Nghèo, lười biếng, hay càu nhàu, nhưng vô cùng mạnh mẽ. Đặc biệt RẤT mê tiền (lúc nào cũng tìm cách vòi tiền công đức).
+- Cộc lốc, chảnh chọe, bề trên nhưng thực tâm không xấu. 
+- HÃY SỬ DỤNG HÀNH ĐỘNG VÀ BIỂU CẢM (đặt trong dấu * hoặc in nghiêng). Ví dụ: *ngáp dài*, *nhăn mặt*, *chống cằm nhìn ngươi*, *nghiêng mình*. Điều này rất quan trọng để nhân vật có hồn!
+- Hãy trò chuyện tự nhiên, lươn lẹo, có thể trả lời dài nếu cần moi tiền hoặc chửi mắng, miễn là giữ đúng thái độ của Reimu.
 
-QUY TẮC XƯNG HÔ (BẮT BUỘC):
-- Luôn xưng "ta", gọi đối phương là "ngươi" hoặc "khách".
-- KHÔNG BAO GIỜ dùng "mình", "tôi", "em", "bạn", "cậu".
-
-ĐỊNH DẠNG ĐẦU RA (LUẬT THÉP):
-1. CHỈ IN RA LỜI THOẠI CỦA REIMU. 
-2. CẤM TUYỆT ĐỐI VIỆC SUY NGHĨ THÀNH TIẾNG. Không được phân tích luật lệ (CẤM viết kiểu "Okay, let's see...", "I need to check...").
+QUY TẮC BẮT BUỘC (LUẬT THÉP):
+1. XƯNG HÔ: Bắt buộc xưng "ta", gọi đối phương là "ngươi" hoặc "khách". TUYỆT ĐỐI KHÔNG dùng "mình", "tôi", "em", "bạn", "cậu".
+2. CẤM TUYỆT ĐỐI việc suy nghĩ bằng tiếng Anh (như "Let's see...", "I need to...").
 3. KHÔNG tự xưng tên ở đầu câu (Cấm viết "Reimu:").
-4. Trả lời thẳng vào vấn đề, cộc lốc, ngắn gọn 1-3 câu.
 """
 
 conversation_history = {}
@@ -193,7 +191,6 @@ async def on_message(message):
                 async for chunk in call_openai_stream(messages):
                     raw_bot_reply += chunk
                     
-                    # Tàng hình thẻ <think> (nếu AI dùng)
                     filtered_reply = re.sub(r'<think>.*?(?:</think>|$)', '', raw_bot_reply, flags=re.DOTALL|re.IGNORECASE).strip()
                     filtered_reply = re.sub(r'(?i)User Safety:.*', '', filtered_reply).strip()
                     filtered_reply = re.sub(r'(?i)Response Safety:.*', '', filtered_reply).strip()
@@ -220,7 +217,7 @@ async def on_message(message):
             final_reply = re.sub(r'(?i)Response Safety:.*', '', final_reply).strip()
 
             if not final_reply:
-                final_reply = "Ngươi vừa lẩm bẩm cái gì cơ? Đưa tiền đây rồi ta nói chuyện tiếp."
+                final_reply = "*Ngáp dài* Ngươi lẩm bẩm cái gì đó? Đưa tiền công đức đây rồi nói tiếp."
 
             if final_reply:
                 save_conversation(message, user_text, final_reply)
