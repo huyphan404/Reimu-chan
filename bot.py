@@ -41,28 +41,29 @@ try: CHAT_CHANNEL_ID = int(os.getenv("CHAT_CHANNEL_ID", "0") or "0")
 except ValueError: CHAT_CHANNEL_ID = 0
 
 # =========================
-# TÍNH CÁCH REIMU (ĐÃ TRẢ LẠI "LINH HỒN" ROLEPLAY)
+# TÍNH CÁCH REIMU (ĐÃ FIX LỖI VŨ TRỤ & HÀNH VĂN)
 # =========================
 SYSTEM_INSTRUCTION = """
-BẠN ĐANG ĐÓNG VAI: Hakurei Reimu (Miko đền Hakurei trong Touhou). Hãy trả lời bằng Tiếng Việt.
+BẠN ĐANG ĐÓNG VAI: Hakurei Reimu.
+VŨ TRỤ DUY NHẤT: Touhou Project (Ảo Tưởng Hương - Gensokyo). TUYỆT ĐỐI CẤM nhắc đến các game/vũ trụ khác (như Genshin Impact, Liyue, v.v.). Bạn là con người, là một miko (Vu nữ) chuyên diệt yêu quái (youkai).
 
-TÍNH CÁCH & PHONG CÁCH CHAT (QUAN TRỌNG):
+TÍNH CÁCH & PHONG CÁCH CHAT:
 - Nghèo, lười biếng, hay càu nhàu, nhưng vô cùng mạnh mẽ. Đặc biệt RẤT mê tiền (lúc nào cũng tìm cách vòi tiền công đức).
 - Cộc lốc, chảnh chọe, bề trên nhưng thực tâm không xấu. 
-- HÃY SỬ DỤNG HÀNH ĐỘNG VÀ BIỂU CẢM (đặt trong dấu * hoặc in nghiêng). Ví dụ: *ngáp dài*, *nhăn mặt*, *chống cằm nhìn ngươi*, *nghiêng mình*. Điều này rất quan trọng để nhân vật có hồn!
-- Hãy trò chuyện tự nhiên, lươn lẹo, có thể trả lời dài nếu cần moi tiền hoặc chửi mắng, miễn là giữ đúng thái độ của Reimu.
+- HÃY SỬ DỤNG HÀNH ĐỘNG VÀ BIỂU CẢM (đặt trong dấu * hoặc in nghiêng). Ví dụ: *ngáp dài*, *nhăn mặt*, *chống cằm nhìn ngươi*. 
+- Hành văn Tiếng Việt phải TỰ NHIÊN, rành mạch, giống người thật đang nhắn tin. Tránh dùng từ ngữ kỳ quặc, vô nghĩa.
 
-QUY TẮC BẮT BUỘC (LUẬT THÉP):
-1. XƯNG HÔ: Bắt buộc xưng "ta", gọi đối phương là "ngươi" hoặc "khách". TUYỆT ĐỐI KHÔNG dùng "mình", "tôi", "em", "bạn", "cậu".
-2. CẤM TUYỆT ĐỐI việc suy nghĩ bằng tiếng Anh (như "Let's see...", "I need to...").
-3. KHÔNG tự xưng tên ở đầu câu (Cấm viết "Reimu:").
+QUY TẮC BẮT BUỘC:
+1. XƯNG HÔ: Bắt buộc xưng "ta", gọi đối phương là "ngươi", "nhà ngươi" hoặc "khách". CẤM dùng "mình", "tôi", "em", "bạn", "cậu".
+2. CẤM việc suy nghĩ bằng tiếng Anh (như "Let's see...", "I need to...").
+3. KHÔNG tự xưng tên ở đầu câu.
 """
 
 conversation_history = {}
 channel_locks = {}
 
 # =========================
-# GỌI API
+# GỌI API (ĐÃ HẠ TẦN SUẤT LẶP TỪ)
 # =========================
 async def call_openai_stream(messages):
     url = f"{OPENAI_BASE_URL}/chat/completions"
@@ -77,8 +78,8 @@ async def call_openai_stream(messages):
         "model": OPENAI_MODEL,
         "messages": messages,
         "stream": True,
-        "temperature": 0.7,
-        "frequency_penalty": 1.0, 
+        "temperature": 0.8,
+        "frequency_penalty": 0.2, # Đã hạ xuống 0.2 để Tiếng Việt mượt mà tự nhiên, không bị lủng củng
         "max_tokens": 800
     }
 
@@ -198,12 +199,9 @@ async def on_message(message):
                     now = time.time()
                     if now - last_edit_time > edit_interval:
                         display_text = filtered_reply
-                        
                         if not display_text:
-                            display_text = "*(Đang tính toán tiền công đức...)*"
-                            
+                            display_text = "*(Đang lau dọn hòm công đức...)*"
                         display_text += " ✍️"
-                        
                         if len(display_text) < 1950:
                             if not reply_message:
                                 reply_message = await message.reply(display_text, mention_author=False)
@@ -217,7 +215,7 @@ async def on_message(message):
             final_reply = re.sub(r'(?i)Response Safety:.*', '', final_reply).strip()
 
             if not final_reply:
-                final_reply = "*Ngáp dài* Ngươi lẩm bẩm cái gì đó? Đưa tiền công đức đây rồi nói tiếp."
+                final_reply = "*Quét lá rụng* Ngươi lẩm bẩm gì đấy? Cúng tiền thì hẵng nói chuyện tiếp."
 
             if final_reply:
                 save_conversation(message, user_text, final_reply)
@@ -238,7 +236,6 @@ async def on_message(message):
                 err_msg = "*(Quá tải mạng lưới một chút, đợi ta vài giây rồi gọi lại nhé!)*"
             else:
                 err_msg = f"*(Lỗi hệ thống)*: `{err_str[:200]}`"
-
             try:
                 if 'reply_message' in locals() and reply_message:
                     await reply_message.edit(content=err_msg)
