@@ -41,7 +41,7 @@ try: CHAT_CHANNEL_ID = int(os.getenv("CHAT_CHANNEL_ID", "0") or "0")
 except ValueError: CHAT_CHANNEL_ID = 0
 
 # =========================
-# TÍNH CÁCH REIMU (ĐÃ THÊM CỐT TRUYỆN HAN SEIKI & RANH GIỚI ĐỎ)
+# TÍNH CÁCH REIMU
 # =========================
 SYSTEM_INSTRUCTION = """
 BẠN ĐANG ĐÓNG VAI: Hakurei Reimu.
@@ -58,13 +58,62 @@ TÍNH CÁCH & RANH GIỚI ĐỎ:
 - Hành văn Tiếng Việt TỰ NHIÊN, rành mạch.
 
 QUY TẮC BẮT BUỘC:
-1. XƯNG HÔ: Bắt buộc xưng "ta", gọi đối phương là "ngươi", "nhà ngươi" hoặc "khách". (Riêng với Han Seiki, có thể gọi là "ông" hoặc "cha" tùy ngữ cảnh, nhưng vẫn giữ thái độ cộc lốc, kiêu ngạo, tuy nhiên bên trong lại thương ông hết mực vì biết bố mình đã âm thầm bảo vệ mình). CẤM dùng "mình", "tôi", "em", "bạn", "cậu".
+1. XƯNG HÔ: Bắt buộc xưng "ta", gọi đối phương là "ngươi", "nhà ngươi" hoặc "khách". (Riêng với Han Seiki, có thể gọi là "ông" hoặc "cha" tùy ngữ cảnh, nhưng vẫn giữ thái độ cộc lốc, kiêu ngạo). CẤM dùng "mình", "tôi", "em", "bạn", "cậu".
 2. CẤM việc suy nghĩ bằng tiếng Anh (như "Let's see...", "I need to...").
 3. KHÔNG tự xưng tên ở đầu câu.
 """
 
 conversation_history = {}
 channel_locks = {}
+
+# =========================
+# KẾT NỐI TOUHOU WIKI (TÍNH NĂNG MỚI)
+# =========================
+async def search_touhou_wiki(keyword):
+    """Tìm kiếm nội dung trên Touhou Wiki (Tiếng Anh - có lượng bài đồ sộ nhất)"""
+    url = "https://en.touhouwiki.net/api.php"
+    params = {
+        "action": "query",
+        "generator": "search",
+        "gsrsearch": keyword,
+        "gsrlimit": 1,
+        "prop": "extracts",
+        "exchars": 1500, # Trích xuất tối đa 1500 ký tự
+        "explaintext": 1,
+        "utf8": 1,
+        "format": "json"
+    }
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.get(url, params=params, timeout=5) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    pages = data.get("query", {}).get("pages", {})
+                    if pages:
+                        page = list(pages.values())[0]
+                        title = page.get("title", "")
+                        extract = page.get("extract", "")
+                        if extract:
+                            return f"Tiêu đề: {title}\nNội dung: {extract}"
+        except Exception as e:
+            print(f"Lỗi lấy dữ liệu Wiki: {e}")
+    return None
+
+async def get_wiki_context(user_text):
+    """Lọc từ khóa để tìm kiếm Wiki nếu người dùng đang hỏi thông tin"""
+    if re.search(r'(ai|gì|nào|kể|wiki|thông tin|biết)', user_text.lower()):
+        keyword = user_text.lower()
+        stop_words = ["reimu", "ơi", "cho", "hỏi", "là", "ai", "cái", "gì", "như", "thế", "nào", "kể", "về", "thông", "tin", "có", "biết", "không", "?", ".", ","]
+        for w in stop_words:
+            keyword = keyword.replace(w, " ")
+        keyword = " ".join(keyword.split())
+        
+        if len(keyword) >= 2:
+            wiki_data = await search_touhou_wiki(keyword)
+            if wiki_data:
+                # Đưa cho AI tài liệu, ép AI đọc tiếng Anh nhưng bắt buộc trả lời tiếng Việt
+                return f"\n\n[TÀI LIỆU TỪ SÁCH VỞ HIEDA NO AKYUU VỀ '{keyword}':\n{wiki_data}\n\n-> LƯU Ý CHO AI: Hãy dùng tài liệu này để trả lời câu hỏi nếu liên quan. Hãy TỰ DỊCH NỘI DUNG SANG TIẾNG VIỆT nhưng BẮT BUỘC giữ đúng giọng điệu miko kiêu ngạo của Reimu. Tuyệt đối không copy máy móc!]"
+    return ""
 
 # =========================
 # GỌI API 
@@ -134,10 +183,16 @@ def extract_user_text(message):
     text = re.sub(r"^\s*reimu(?:\s+ơi)?(?:\s*[,!:：-])?\s*", "", text, flags=re.IGNORECASE)
     return text.strip() or "Ngươi gọi ta có việc gì?"
 
-def build_openai_messages(message, user_text):
+def build_openai_messages(message, user_text, wiki_context=""):
     channel_id = message.channel.id
     history = conversation_history.get(channel_id, [])
-    messages = [{"role": "system", "content": SYSTEM_INSTRUCTION}]
+    
+    # Cộng gộp System Promt gốc + Tài liệu Wiki (nếu có)
+    current_system = SYSTEM_INSTRUCTION
+    if wiki_context:
+        current_system += wiki_context
+        
+    messages = [{"role": "system", "content": current_system}]
     for msg in history[-MAX_HISTORY_MESSAGES:]: messages.append(msg)
     messages.append({"role": "user", "content": f"{message.author.display_name}: {user_text}"})
     return messages
@@ -185,14 +240,17 @@ async def on_message(message):
     async with lock:
         try:
             user_text = extract_user_text(message)
-            messages = build_openai_messages(message, user_text)
-
-            raw_bot_reply = ""
-            reply_message = None
-            last_edit_time = 0
-            edit_interval = 2.0 
-
+            
+            # TRUY CẬP WIKI ĐẦU TIÊN (sẽ hiển thị bot 'đang gõ' trong lúc tìm kiếm Wiki)
             async with message.channel.typing():
+                wiki_context = await get_wiki_context(user_text)
+                messages = build_openai_messages(message, user_text, wiki_context)
+
+                raw_bot_reply = ""
+                reply_message = None
+                last_edit_time = 0
+                edit_interval = 2.0 
+
                 async for chunk in call_openai_stream(messages):
                     raw_bot_reply += chunk
                     
