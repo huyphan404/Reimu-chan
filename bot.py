@@ -1,9 +1,6 @@
 import asyncio
-import json
-import logging
-import os
 import re
-import socket
+import os
 import time
 from threading import Thread
 
@@ -11,6 +8,7 @@ import discord
 from discord import app_commands
 import aiohttp
 from flask import Flask
+from openai import AsyncOpenAI  # <--- THÊM THƯ VIỆN NÀY
 
 # =========================
 # HEALTH CHECK
@@ -40,6 +38,12 @@ MAX_HISTORY_MESSAGES = 8
 try: CHAT_CHANNEL_ID = int(os.getenv("CHAT_CHANNEL_ID", "0") or "0")
 except ValueError: CHAT_CHANNEL_ID = 0
 
+# KHỞI TẠO CLIENT OPENAI (KẾT NỐI OPENROUTER)
+aclient = AsyncOpenAI(
+    base_url=OPENAI_BASE_URL,
+    api_key=OPENAI_API_KEY,
+)
+
 # =========================
 # TÍNH CÁCH REIMU
 # =========================
@@ -67,10 +71,10 @@ conversation_history = {}
 channel_locks = {}
 
 # =========================
-# KẾT NỐI TOUHOU WIKI (TÍNH NĂNG MỚI)
+# KẾT NỐI TOUHOU WIKI
 # =========================
 async def search_touhou_wiki(keyword):
-    """Tìm kiếm nội dung trên Touhou Wiki (Tiếng Anh - có lượng bài đồ sộ nhất)"""
+    """Tìm kiếm nội dung trên Touhou Wiki"""
     url = "https://en.touhouwiki.net/api.php"
     params = {
         "action": "query",
@@ -78,7 +82,7 @@ async def search_touhou_wiki(keyword):
         "gsrsearch": keyword,
         "gsrlimit": 1,
         "prop": "extracts",
-        "exchars": 1500, # Trích xuất tối đa 1500 ký tự
+        "exchars": 1500,
         "explaintext": 1,
         "utf8": 1,
         "format": "json"
@@ -100,7 +104,6 @@ async def search_touhou_wiki(keyword):
     return None
 
 async def get_wiki_context(user_text):
-    """Lọc từ khóa để tìm kiếm Wiki nếu người dùng đang hỏi thông tin"""
     if re.search(r'(ai|gì|nào|kể|wiki|thông tin|biết)', user_text.lower()):
         keyword = user_text.lower()
         stop_words = ["reimu", "ơi", "cho", "hỏi", "là", "ai", "cái", "gì", "như", "thế", "nào", "kể", "về", "thông", "tin", "có", "biết", "không", "?", ".", ","]
@@ -111,60 +114,34 @@ async def get_wiki_context(user_text):
         if len(keyword) >= 2:
             wiki_data = await search_touhou_wiki(keyword)
             if wiki_data:
-                # Đưa cho AI tài liệu, ép AI đọc tiếng Anh nhưng bắt buộc trả lời tiếng Việt
                 return f"\n\n[TÀI LIỆU TỪ SÁCH VỞ HIEDA NO AKYUU VỀ '{keyword}':\n{wiki_data}\n\n-> LƯU Ý CHO AI: Hãy dùng tài liệu này để trả lời câu hỏi nếu liên quan. Hãy TỰ DỊCH NỘI DUNG SANG TIẾNG VIỆT nhưng BẮT BUỘC giữ đúng giọng điệu miko kiêu ngạo của Reimu. Tuyệt đối không copy máy móc!]"
     return ""
 
 # =========================
-# GỌI API 
+# GỌI API (SỬ DỤNG SDK OPENAI CHO GỌN & MƯỢT HƠN)
 # =========================
 async def call_openai_stream(messages):
-    url = f"{OPENAI_BASE_URL}/chat/completions"
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {OPENAI_API_KEY}",
-        "HTTP-Referer": "https://discord.com",
-        "X-Title": "Reimu Discord Bot"
-    }
-
-    payload = {
-        "model": OPENAI_MODEL,
-        "messages": messages,
-        "stream": True,
-        "temperature": 0.8,
-        "frequency_penalty": 0.2, 
-        "max_tokens": 800
-    }
-
-    connector = aiohttp.TCPConnector(family=socket.AF_INET)
-    async with aiohttp.ClientSession(connector=connector) as session:
-        try:
-            async with session.post(
-                url, headers=headers, json=payload,
-                timeout=aiohttp.ClientTimeout(sock_connect=10, sock_read=60)
-            ) as response:
-                
-                if response.status == 429: raise RuntimeError("RATE_LIMIT")
-                if not response.ok:
-                    raise RuntimeError(f"Lỗi hệ thống ({response.status})")
-
-                async for raw_line in response.content:
-                    if not raw_line: continue
-                    line = raw_line.decode('utf-8').strip()
-                    if not line.startswith("data:"): continue
-                    raw_data = line[5:].strip()
-                    if raw_data == "[DONE]": break
-
-                    try:
-                        data = json.loads(raw_data)
-                        choices = data.get("choices", [])
-                        if choices:
-                            delta = choices[0].get("delta", {})
-                            text = delta.get("content", "")
-                            if text: yield text
-                    except json.JSONDecodeError: continue
-        except (aiohttp.ClientError, asyncio.TimeoutError) as error:
-            raise RuntimeError(f"Lỗi mạng: {error}")
+    try:
+        response = await aclient.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=messages,
+            stream=True,
+            temperature=0.8,
+            frequency_penalty=0.2,
+            max_tokens=800,
+            extra_headers={
+                "HTTP-Referer": "https://discord.com",
+                "X-Title": "Reimu Discord Bot"
+            }
+        )
+        async for chunk in response:
+            if chunk.choices and chunk.choices[0].delta.content:
+                yield chunk.choices[0].delta.content
+    except Exception as e:
+        err_msg = str(e)
+        if "429" in err_msg or "rate limit" in err_msg.lower():
+            raise RuntimeError("RATE_LIMIT")
+        raise RuntimeError(f"Lỗi mạng: {err_msg}")
 
 # =========================
 # LỊCH SỬ & TIN NHẮN
@@ -187,7 +164,6 @@ def build_openai_messages(message, user_text, wiki_context=""):
     channel_id = message.channel.id
     history = conversation_history.get(channel_id, [])
     
-    # Cộng gộp System Promt gốc + Tài liệu Wiki (nếu có)
     current_system = SYSTEM_INSTRUCTION
     if wiki_context:
         current_system += wiki_context
@@ -241,7 +217,6 @@ async def on_message(message):
         try:
             user_text = extract_user_text(message)
             
-            # TRUY CẬP WIKI ĐẦU TIÊN (sẽ hiển thị bot 'đang gõ' trong lúc tìm kiếm Wiki)
             async with message.channel.typing():
                 wiki_context = await get_wiki_context(user_text)
                 messages = build_openai_messages(message, user_text, wiki_context)
