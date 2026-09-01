@@ -236,7 +236,7 @@ async def on_message(message):
 # =========================
 # VÒNG LẶP CHỐNG CRASH VÀ ÉP LỖI HIỆN LÊN LOG
 # =========================
-discord.utils.setup_logging()  # Bật hệ thống log chi tiết của discord
+discord.utils.setup_logging()
 
 if __name__ == "__main__":
     keep_alive()
@@ -244,10 +244,9 @@ if __name__ == "__main__":
     while True:
         try:
             print("Đang khởi động kết nối tới Discord...", flush=True)
-            # log_handler=None để tránh lặp log của discord
             client.run(DISCORD_TOKEN, log_handler=None)
         except Exception as e:
-            # ÉP IN RA MÀN HÌNH CRASH RÕ RÀNG
             print(f">>> LỖI CRASH RỒI: {repr(e)}", flush=True)
-            print("Đang chờ 10s để thử lại...", flush=True)
-            time.sleep(10)
+            # TĂNG LÊN 30 GIÂY ĐỂ DISCORD KHÔNG BAN IP LẦN NỮA
+            print("Đang chờ 30s để thử lại...", flush=True) 
+            time.sleep(30)
