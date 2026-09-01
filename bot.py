@@ -118,7 +118,7 @@ async def get_wiki_context(user_text):
     return ""
 
 # =========================
-# GỌI API (SỬ DỤNG SDK OPENAI CHO GỌN & MƯỢT HƠN)
+# GỌI API (SỬ DỤNG SDK OPENAI KẾT NỐI OPENROUTER)
 # =========================
 async def call_openai_stream(messages):
     try:
@@ -131,7 +131,7 @@ async def call_openai_stream(messages):
             max_tokens=800,
             extra_headers={
                 "HTTP-Referer": "https://discord.com",
-                "X-Title": "Reimu Discord Bot"
+                "X-OpenRouter-Title": "Reimu Discord Bot"  # ĐÃ CẬP NHẬT THEO HƯỚNG DẪN CỦA OPENROUTER
             }
         )
         async for chunk in response:
