@@ -305,6 +305,17 @@ async def on_message(message):
                     await message.reply(err_msg, mention_author=False)
             except discord.DiscordException: pass
 
+# =========================
+# VÒNG LẶP CHỐNG CRASH
+# =========================
 if __name__ == "__main__":
     keep_alive()
-    client.run(DISCORD_TOKEN, log_handler=None)
+    
+    while True:
+        try:
+            print("Đang khởi động kết nối tới Discord...")
+            client.run(DISCORD_TOKEN, log_handler=None)
+        except Exception as e:
+            print(f"Bot gặp lỗi nghiêm trọng (crash): {e}")
+            print("Đang cố gắng khởi động lại sau 10 giây...")
+            time.sleep(10)
