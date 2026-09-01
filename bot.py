@@ -8,7 +8,7 @@ import discord
 from discord import app_commands
 import aiohttp
 from flask import Flask
-from openai import AsyncOpenAI  # <--- THÊM THƯ VIỆN NÀY
+from openai import AsyncOpenAI
 
 # =========================
 # HEALTH CHECK
@@ -38,10 +38,11 @@ MAX_HISTORY_MESSAGES = 8
 try: CHAT_CHANNEL_ID = int(os.getenv("CHAT_CHANNEL_ID", "0") or "0")
 except ValueError: CHAT_CHANNEL_ID = 0
 
-# KHỞI TẠO CLIENT OPENAI (KẾT NỐI OPENROUTER)
+# KHỞI TẠO CLIENT OPENAI (ĐÃ THÊM TIMEOUT CHỐNG TREO)
 aclient = AsyncOpenAI(
     base_url=OPENAI_BASE_URL,
     api_key=OPENAI_API_KEY,
+    timeout=30.0  # <--- BẢO HIỂM SỐ 1: Hủy kết nối nếu OpenRouter treo quá 30 giây
 )
 
 # =========================
@@ -74,7 +75,7 @@ channel_locks = {}
 # KẾT NỐI TOUHOU WIKI
 # =========================
 async def search_touhou_wiki(keyword):
-    """Tìm kiếm nội dung trên Touhou Wiki"""
+    """Tìm kiếm nội dung trên Touhou Wiki (Đã chống treo)"""
     url = "https://en.touhouwiki.net/api.php"
     params = {
         "action": "query",
@@ -87,9 +88,12 @@ async def search_touhou_wiki(keyword):
         "utf8": 1,
         "format": "json"
     }
-    async with aiohttp.ClientSession() as session:
+    
+    # <--- BẢO HIỂM SỐ 2: Ép thời gian tải JSON tối đa 5 giây
+    timeout_obj = aiohttp.ClientTimeout(total=5.0)
+    async with aiohttp.ClientSession(timeout=timeout_obj) as session:
         try:
-            async with session.get(url, params=params, timeout=5) as resp:
+            async with session.get(url, params=params) as resp:
                 if resp.status == 200:
                     data = await resp.json()
                     pages = data.get("query", {}).get("pages", {})
@@ -118,7 +122,7 @@ async def get_wiki_context(user_text):
     return ""
 
 # =========================
-# GỌI API (SỬ DỤNG SDK OPENAI KẾT NỐI OPENROUTER)
+# GỌI API BẰNG OPENAI SDK
 # =========================
 async def call_openai_stream(messages):
     try:
@@ -131,7 +135,7 @@ async def call_openai_stream(messages):
             max_tokens=800,
             extra_headers={
                 "HTTP-Referer": "https://discord.com",
-                "X-OpenRouter-Title": "Reimu Discord Bot"  # ĐÃ CẬP NHẬT THEO HƯỚNG DẪN CỦA OPENROUTER
+                "X-OpenRouter-Title": "Reimu Discord Bot" 
             }
         )
         async for chunk in response:
@@ -141,6 +145,8 @@ async def call_openai_stream(messages):
         err_msg = str(e)
         if "429" in err_msg or "rate limit" in err_msg.lower():
             raise RuntimeError("RATE_LIMIT")
+        elif "timeout" in err_msg.lower():  # <--- BẢO HIỂM SỐ 3: Xử lý êm ái khi bị Timeout
+            raise RuntimeError("TIMEOUT")
         raise RuntimeError(f"Lỗi mạng: {err_msg}")
 
 # =========================
@@ -270,9 +276,12 @@ async def on_message(message):
         except Exception as error:
             err_str = str(error)
             if "RATE_LIMIT" in err_str:
-                err_msg = "*(Quá tải mạng lưới một chút, đợi ta vài giây rồi gọi lại nhé!)*"
+                err_msg = "*(Càu nhàu)* Mấy tên thần linh nay làm ăn tắc trách quá, sóng mạng bị nghẽn rồi. Đợi ta một chút!"
+            elif "TIMEOUT" in err_str:
+                err_msg = "*(Khoanh tay, thở dài)* Tín hiệu đường truyền bị yêu quái cắn đứt rồi. Lát nữa gọi lại cho ta!"
             else:
-                err_msg = f"*(Lỗi hệ thống)*: `{err_str[:200]}`"
+                err_msg = f"*(Lườm sát khí)* Trận pháp xảy ra dị thường rồi: `{err_str[:200]}`"
+            
             try:
                 if 'reply_message' in locals() and reply_message:
                     await reply_message.edit(content=err_msg)
@@ -289,7 +298,8 @@ if __name__ == "__main__":
     while True:
         try:
             print("Đang khởi động kết nối tới Discord...")
-            client.run(DISCORD_TOKEN, log_handler=None)
+            # <--- BẢO HIỂM SỐ 4: Bỏ log_handler=None để Terminal hiện đỏ chót nếu mất mạng
+            client.run(DISCORD_TOKEN)
         except Exception as e:
             print(f"Bot gặp lỗi nghiêm trọng (crash): {e}")
             print("Đang cố gắng khởi động lại sau 10 giây...")
