@@ -8,7 +8,6 @@ from threading import Thread
 
 import discord
 from discord import app_commands
-import aiohttp
 from flask import Flask
 from openai import AsyncOpenAI
 
@@ -152,8 +151,8 @@ async def clearmem(interaction: discord.Interaction):
 
 @client.event
 async def on_ready():
-    print(f"=====================================")
-    print(f"Miko {client.user} đã sẵn sàng!")
+    print(f"=====================================", flush=True)
+    print(f"Miko {client.user} đã sẵn sàng!", flush=True)
     print(f"=====================================", flush=True)
     try: await tree.sync()
     except Exception: pass
@@ -235,17 +234,20 @@ async def on_message(message):
             except discord.DiscordException: pass
 
 # =========================
-# VÒNG LẶP CHỐNG CRASH
+# VÒNG LẶP CHỐNG CRASH VÀ ÉP LỖI HIỆN LÊN LOG
 # =========================
+discord.utils.setup_logging()  # Bật hệ thống log chi tiết của discord
+
 if __name__ == "__main__":
     keep_alive()
     
     while True:
         try:
-            print("Đang khởi động kết nối tới Discord...")
-            # Bật log bằng cách BỎ `log_handler=None`
-            client.run(DISCORD_TOKEN)
+            print("Đang khởi động kết nối tới Discord...", flush=True)
+            # log_handler=None để tránh lặp log của discord
+            client.run(DISCORD_TOKEN, log_handler=None)
         except Exception as e:
-            print(f"Bot gặp lỗi nghiêm trọng (crash): {e}")
-            print("Đang cố gắng khởi động lại sau 10 giây...")
+            # ÉP IN RA MÀN HÌNH CRASH RÕ RÀNG
+            print(f">>> LỖI CRASH RỒI: {repr(e)}", flush=True)
+            print("Đang chờ 10s để thử lại...", flush=True)
             time.sleep(10)
