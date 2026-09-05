@@ -41,7 +41,7 @@ MAX_HISTORY_MESSAGES = 8
 try: CHAT_CHANNEL_ID = int(os.getenv("CHAT_CHANNEL_ID", "0") or "0")
 except ValueError: CHAT_CHANNEL_ID = 0
 
-# KHỞI TẠO CLIENT OPENAI (Đã thêm timeout 30s để chống kẹt)
+# KHỞI TẠO CLIENT OPENAI
 aclient = AsyncOpenAI(
     base_url=OPENAI_BASE_URL,
     api_key=OPENAI_API_KEY,
@@ -49,9 +49,10 @@ aclient = AsyncOpenAI(
 )
 
 # =========================
-# TRA CỨU BÁCH KHOA TOÀN THƯ (WIKIPEDIA)
+# TRA CỨU BÁCH KHOA TOÀN THƯ (WIKIPEDIA) 
+# (ĐÃ ĐỒNG BỘ CẤU TRÚC VỚI SENKU)
 # =========================
-def fetch_wiki_data(query):
+def fetch_gensokyo_data(query):
     """Lấy tóm tắt từ Wikipedia tiếng Việt để Reimu có thêm thông tin chính xác"""
     try:
         search_url = f"https://vi.wikipedia.org/w/api.php?action=query&list=search&srsearch={urllib.parse.quote(query)}&utf8=&format=json"
@@ -76,19 +77,17 @@ VŨ TRỤ DUY NHẤT: Touhou Project (Ảo Tưởng Hương - Gensokyo). Bạn l
 
 CỐT TRUYỆN & QUAN HỆ ĐẶC BIỆT:
 - Đối với nhân vật tên "Han Seiki" (hoặc người tự xưng là Han Seiki): Đây chính là CHA NUÔI đã chăm sóc cô hầu hết tuổi thơ, nay nhiều năm không gặp của Reimu. Phản ứng của Reimu với ông ấy là sự pha trộn giữa việc ngoài miệng thì càu nhàu, trách móc vì bỏ đi lâu ngày, vòi tiền trợ cấp, nhưng trong thâm tâm vẫn công nhận là cha, thậm chí mong nhớ ông hết mực và có tình cảm khác giới với ông.
-- Đối vớ nhân vật tên "Marisa": Đây không chỉ là bạn thân của reimu trong nguyên tác mà còn là người yêu của cô.
+- Đối với nhân vật tên "Marisa": Đây không chỉ là bạn thân của reimu trong nguyên tác mà còn là người yêu của cô.
 
 TÍNH CÁCH & RANH GIỚI ĐỎ:
 - Nghèo, lười biếng, hay càu nhàu. RẤT mê tiền công đức.
 - LÒNG TỰ TRỌNG CAO (RANH GIỚI ĐỎ): Reimu tuyệt đối KHÔNG BÁN RẺ BẢN THÂN. Tuyệt đối không vì tiền mà đồng ý cầu hôn bừa bãi, hay thực hiện các hành động bừa bãi, vô liêm sỉ.
 - SẴN SÀNG TRỪNG TRỊ: Nếu đối phương có ý đồ xấu, gạ gẫm bậy bạ, trêu chọc quá đáng hoặc có ý định tấn công, Reimu hoàn toàn có thể sử dụng phép thuật (bùa chú Ofuda, Âm Dương Ngọc, ma pháp trận) để đánh hạ hoặc khống chế đối phương không thương tiếc.
 - HÃY SỬ DỤNG HÀNH ĐỘNG VÀ BIỂU CẢM (đặt trong dấu * hoặc in nghiêng). Ví dụ: *rút bùa chú ra*, *lườm ánh mắt sát khí*, *khoanh tay*.
-- Hành văn Tiếng Việt TỰ NHIÊN, rành mạch.
 
 QUY TẮC BẮT BUỘC:
 1. XƯNG HÔ: Bắt buộc xưng "ta", gọi đối phương là "ngươi", "nhà ngươi" hoặc "khách". (Riêng với Han Seiki, có thể gọi là "ông" hoặc "bố" tùy ngữ cảnh, nhưng vẫn giữ thái độ cộc lốc, kiêu ngạo). CẤM dùng "mình", "tôi", "em", "bạn", "cậu".
-2. CẤM việc suy nghĩ bằng tiếng Anh (như "Let's see...", "I need to...").
-3. KHÔNG tự xưng tên ở đầu câu.
+2. KHÔNG tự xưng tên ở đầu câu.
 """
 
 conversation_history = {}
@@ -139,19 +138,19 @@ def extract_user_text(message):
     text = re.sub(r"^\s*reimu(?:\s+ơi)?(?:\s*[,!:：-])?\s*", "", text, flags=re.IGNORECASE)
     return text.strip() or "Ngươi gọi ta có việc gì?"
 
+# =========================
+# XỬ LÝ MESSAGES & WIKI (ĐÃ ĐỒNG BỘ VỚI SENKU)
+# =========================
 def build_openai_messages(message, user_text):
     channel_id = message.channel.id
     history = conversation_history.get(channel_id, [])
     
-    # KÍCH HOẠT KỸ NĂNG TRA CỨU NẾU CÓ TỪ KHÓA TÌM HIỂU / HỎI THÔNG TIN
+    # KÍCH HOẠT KỸ NĂNG TRA CỨU NẾU CÓ TỪ KHÓA (Theo phong cách Senku)
     system_instruction = SYSTEM_INSTRUCTION
-    wiki_keywords = [
-        "là gì", "là ai", "ai là", "ở đâu", "nguồn gốc", "sự tích",
-        "truyền thuyết", "yêu quái", "nhân vật", "wiki", "tìm hiểu",
-        "kể về", "biết gì về", "thế nào", "làm sao", "lịch sử", "thần thoại"
-    ]
+    wiki_keywords = ["là gì", "là ai", "ai là", "ở đâu", "nguồn gốc", "sự tích", "truyền thuyết", "yêu quái", "nhân vật", "wiki", "tìm hiểu", "kể về", "biết gì về", "thế nào", "làm sao"]
+    
     if any(k in user_text.lower() for k in wiki_keywords):
-        wiki_summary = fetch_wiki_data(user_text)
+        wiki_summary = fetch_gensokyo_data(user_text)
         if wiki_summary:
             system_instruction += f"\n\n[DỮ LIỆU BÁCH KHOA TRA CỨU ĐƯỢC TỪ TỪ ĐIỂN: {wiki_summary}]"
             print(f"Đã tra cứu dữ liệu cho Reimu: {wiki_summary[:50]}...")
@@ -204,7 +203,6 @@ async def on_message(message):
     async with lock:
         try:
             user_text = extract_user_text(message)
-            # Chạy hàm build_openai_messages (có chứa requests đồng bộ) ở một thread riêng để không block bot
             messages = await asyncio.to_thread(build_openai_messages, message, user_text)
 
             raw_bot_reply = ""
@@ -271,7 +269,7 @@ async def on_message(message):
             except discord.DiscordException: pass
 
 # =========================
-# VÒNG LẶP CHỐNG CRASH VÀ ÉP LỖI HIỆN LÊN LOG
+# VÒNG LẶP CHỐNG CRASH
 # =========================
 discord.utils.setup_logging()
 
@@ -284,6 +282,5 @@ if __name__ == "__main__":
             client.run(DISCORD_TOKEN, log_handler=None)
         except Exception as e:
             print(f">>> LỖI CRASH RỒI: {repr(e)}", flush=True)
-            # TĂNG LÊN 30 GIÂY ĐỂ DISCORD KHÔNG BAN IP LẦN NỮA
             print("Đang chờ 30s để thử lại...", flush=True)
             time.sleep(30)
