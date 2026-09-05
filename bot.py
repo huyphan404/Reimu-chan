@@ -5,6 +5,8 @@ import os
 import re
 import time
 from threading import Thread
+import urllib.parse
+import requests
 
 import discord
 from discord import app_commands
@@ -43,8 +45,27 @@ except ValueError: CHAT_CHANNEL_ID = 0
 aclient = AsyncOpenAI(
     base_url=OPENAI_BASE_URL,
     api_key=OPENAI_API_KEY,
-    timeout=30.0 
+    timeout=30.0
 )
+
+# =========================
+# TRA CỨU BÁCH KHOA TOÀN THƯ (WIKIPEDIA)
+# =========================
+def fetch_wiki_data(query):
+    """Lấy tóm tắt từ Wikipedia tiếng Việt để Reimu có thêm thông tin chính xác"""
+    try:
+        search_url = f"https://vi.wikipedia.org/w/api.php?action=query&list=search&srsearch={urllib.parse.quote(query)}&utf8=&format=json"
+        res = requests.get(search_url, timeout=3)
+        search_data = res.json()
+        if search_data.get("query", {}).get("search"):
+            title = search_data["query"]["search"][0]["title"]
+            summary_url = f"https://vi.wikipedia.org/api/rest_v1/page/summary/{urllib.parse.quote(title)}"
+            sum_res = requests.get(summary_url, timeout=3)
+            if sum_res.status_code == 200:
+                return sum_res.json().get("extract", "")
+    except Exception as e:
+        print(f"Lỗi tra cứu Wiki: {e}")
+    return ""
 
 # =========================
 # TÍNH CÁCH REIMU
@@ -87,7 +108,7 @@ async def call_openai_stream(messages):
             max_tokens=800,
             extra_headers={
                 "HTTP-Referer": "https://discord.com",
-                "X-OpenRouter-Title": "Reimu Discord Bot" 
+                "X-OpenRouter-Title": "Reimu Discord Bot"
             }
         )
         async for chunk in response:
@@ -97,7 +118,7 @@ async def call_openai_stream(messages):
         err_msg = str(e)
         if "429" in err_msg or "rate limit" in err_msg.lower():
             raise RuntimeError("RATE_LIMIT")
-        elif "timeout" in err_msg.lower(): 
+        elif "timeout" in err_msg.lower():
             raise RuntimeError("TIMEOUT")
         raise RuntimeError(f"Lỗi mạng: {err_msg}")
 
@@ -121,7 +142,21 @@ def extract_user_text(message):
 def build_openai_messages(message, user_text):
     channel_id = message.channel.id
     history = conversation_history.get(channel_id, [])
-    messages = [{"role": "system", "content": SYSTEM_INSTRUCTION}]
+    
+    # KÍCH HOẠT KỸ NĂNG TRA CỨU NẾU CÓ TỪ KHÓA TÌM HIỂU / HỎI THÔNG TIN
+    system_instruction = SYSTEM_INSTRUCTION
+    wiki_keywords = [
+        "là gì", "là ai", "ai là", "ở đâu", "nguồn gốc", "sự tích",
+        "truyền thuyết", "yêu quái", "nhân vật", "wiki", "tìm hiểu",
+        "kể về", "biết gì về", "thế nào", "làm sao", "lịch sử", "thần thoại"
+    ]
+    if any(k in user_text.lower() for k in wiki_keywords):
+        wiki_summary = fetch_wiki_data(user_text)
+        if wiki_summary:
+            system_instruction += f"\n\n[DỮ LIỆU BÁCH KHOA TRA CỨU ĐƯỢC TỪ TỪ ĐIỂN: {wiki_summary}]"
+            print(f"Đã tra cứu dữ liệu cho Reimu: {wiki_summary[:50]}...")
+
+    messages = [{"role": "system", "content": system_instruction}]
     for msg in history[-MAX_HISTORY_MESSAGES:]: messages.append(msg)
     messages.append({"role": "user", "content": f"{message.author.display_name}: {user_text}"})
     return messages
@@ -169,12 +204,13 @@ async def on_message(message):
     async with lock:
         try:
             user_text = extract_user_text(message)
-            messages = build_openai_messages(message, user_text)
+            # Chạy hàm build_openai_messages (có chứa requests đồng bộ) ở một thread riêng để không block bot
+            messages = await asyncio.to_thread(build_openai_messages, message, user_text)
 
             raw_bot_reply = ""
             reply_message = None
             last_edit_time = 0
-            edit_interval = 2.0 
+            edit_interval = 2.0
 
             async with message.channel.typing():
                 async for chunk in call_openai_stream(messages):
@@ -249,5 +285,5 @@ if __name__ == "__main__":
         except Exception as e:
             print(f">>> LỖI CRASH RỒI: {repr(e)}", flush=True)
             # TĂNG LÊN 30 GIÂY ĐỂ DISCORD KHÔNG BAN IP LẦN NỮA
-            print("Đang chờ 30s để thử lại...", flush=True) 
+            print("Đang chờ 30s để thử lại...", flush=True)
             time.sleep(30)
