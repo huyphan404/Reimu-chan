@@ -28,29 +28,32 @@ def keep_alive():
     Thread(target=run_health_server, daemon=True, name="health-server").start()
 
 # =========================
-# CẤU HÌNH API
+# CẤU HÌNH API - KHÓA CỨNG GEMINI ĐỂ CHỐNG LỖI
 # =========================
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gemini-1.5-flash").strip()
-OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai/").strip().rstrip('/')
+
+# Lấy Key từ OPENAI_API_KEY hoặc GEMINI_API_KEY (tùy bạn đang đặt tên gì trên Render)
+API_KEY = os.getenv("OPENAI_API_KEY") or os.getenv("GEMINI_API_KEY")
+
+# ÉP BUỘC dùng URL và Model chuẩn của Gemini, phớt lờ cấu hình trên Render
+FIXED_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
+FIXED_MODEL = "gemini-1.5-flash"
 
 MAX_HISTORY_MESSAGES = 8
 try: CHAT_CHANNEL_ID = int(os.getenv("CHAT_CHANNEL_ID", "0") or "0")
 except ValueError: CHAT_CHANNEL_ID = 0
 
-# KHỞI TẠO CLIENT OPENAI
+# KHỞI TẠO CLIENT OPENAI (KẾT NỐI VỚI GEMINI)
 aclient = AsyncOpenAI(
-    base_url=OPENAI_BASE_URL,
-    api_key=OPENAI_API_KEY,
+    base_url=FIXED_BASE_URL,
+    api_key=API_KEY,
     timeout=30.0 
 )
 
 # =========================
-# TRA CỨU BÁCH KHOA TOÀN THƯ (WIKIPEDIA) 
+# TRA CỨU BÁCH KHOA TOÀN THƯ
 # =========================
 def fetch_gensokyo_data(query):
-    """Lấy tóm tắt từ Wikipedia tiếng Việt để Reimu có thêm thông tin chính xác"""
     try:
         search_url = f"https://vi.wikipedia.org/w/api.php?action=query&list=search&srsearch={urllib.parse.quote(query)}&utf8=&format=json"
         res = requests.get(search_url, timeout=3)
@@ -91,16 +94,15 @@ conversation_history = {}
 channel_locks = {}
 
 # =========================
-# GỌI API (SỬ DỤNG OPENAI SDK)
+# GỌI API GEMINI
 # =========================
 async def call_openai_stream(messages):
     try:
         response = await aclient.chat.completions.create(
-            model=OPENAI_MODEL,
+            model=FIXED_MODEL,
             messages=messages,
             stream=True,
             temperature=0.8,
-            # ĐÃ XÓA DÒNG frequency_penalty Ở ĐÂY
             max_tokens=800,
             extra_headers={
                 "HTTP-Referer": "https://discord.com",
@@ -112,7 +114,7 @@ async def call_openai_stream(messages):
                 yield chunk.choices[0].delta.content
     except Exception as e:
         err_msg = str(e)
-        if "429" in err_msg or "rate limit" in err_msg.lower():
+        if "429" in err_msg or "rate limit" in err_msg.lower() or "quota" in err_msg.lower():
             raise RuntimeError("RATE_LIMIT")
         elif "timeout" in err_msg.lower():
             raise RuntimeError("TIMEOUT")
@@ -139,7 +141,6 @@ def build_openai_messages(message, user_text):
     channel_id = message.channel.id
     history = conversation_history.get(channel_id, [])
     
-    # KÍCH HOẠT KỸ NĂNG TRA CỨU NẾU CÓ TỪ KHÓA
     system_instruction = SYSTEM_INSTRUCTION
     wiki_keywords = ["là gì", "là ai", "ai là", "ở đâu", "nguồn gốc", "sự tích", "truyền thuyết", "yêu quái", "nhân vật", "wiki", "tìm hiểu", "kể về", "biết gì về", "thế nào", "làm sao"]
     
@@ -147,7 +148,6 @@ def build_openai_messages(message, user_text):
         wiki_summary = fetch_gensokyo_data(user_text)
         if wiki_summary:
             system_instruction += f"\n\n[DỮ LIỆU BÁCH KHOA TRA CỨU ĐƯỢC TỪ TỪ ĐIỂN: {wiki_summary}]"
-            print(f"Đã tra cứu dữ liệu cho Reimu: {wiki_summary[:50]}...")
 
     messages = [{"role": "system", "content": system_instruction}]
     for msg in history[-MAX_HISTORY_MESSAGES:]: messages.append(msg)
