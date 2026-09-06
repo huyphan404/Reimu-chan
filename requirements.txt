@@ -1,5 +1,5 @@
 discord.py
 requests
 flask
-google-genai
+google-generativeai
 aiohttp
