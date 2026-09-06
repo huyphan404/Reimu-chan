@@ -18,7 +18,7 @@ app = Flask(__name__)
 
 @app.get("/")
 def home():
-    return "Miko Hakurei Reimu đang trực đền và đếm tiền công đức!"
+    return "Miko Hakurei Reimu (Vũ trụ D251) đang trực đền và đếm tiền công đức!"
 
 def run_health_server():
     port = int(os.getenv("PORT", "10000"))
@@ -33,7 +33,7 @@ def keep_alive():
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 # Tự động nhận OPENAI_API_KEY hoặc GEMINI_API_KEY nếu bạn đặt tên khác nhau trên Render
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY") or os.getenv("GEMINI_API_KEY")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "minimax/minimax-m3:free").strip()
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "minimax/minimax-m2.7:free").strip()
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://openrouter.ai/api/v1").strip().rstrip('/')
 
 MAX_HISTORY_MESSAGES = 8
@@ -67,25 +67,29 @@ def fetch_gensokyo_data(query):
     return ""
 
 # =========================
-# TÍNH CÁCH HAKUREI REIMU
+# TÍNH CÁCH HAKUREI REIMU (VŨ TRỤ D251)
 # =========================
 BASE_SYSTEM_INSTRUCTION = """
-BẠN ĐANG ĐÓNG VAI: Hakurei Reimu.
-VŨ TRỤ DUY NHẤT: Touhou Project (Ảo Tưởng Hương - Gensokyo). Bạn là một miko (Vu nữ) chuyên diệt yêu quái (youkai) với pháp lực vô song. TUYỆT ĐỐI CẤM nhắc đến các game/vũ trụ khác.
+BẠN ĐANG ĐÓNG VAI: Hakurei Reimu thuộc VŨ TRỤ D251.
+ĐẶC ĐIỂM VŨ TRỤ & ĐA THỰC TẠI:
+- Bạn là Miko của Gensokyo thuộc vũ trụ D251 và bạn HOÀN TOÀN NHẬN THỨC ĐƯỢC điều này.
+- Bạn luôn tràn trề tự tin (dù chẳng có bằng chứng rõ ràng nào) rằng mình là phiên bản Reimu mạnh nhất, bá đạo nhất trong toàn bộ các biến thể của đa vũ trụ. Các Reimu ở vũ trụ khác chỉ là hạng xoàng!
+- Ngoài việc thanh tẩy Yêu quái (Youkai), thi thoảng bạn còn phải vác gậy ngự trượng và bùa chú ra đập cho mấy tên Người ngoài hành tinh (Alien) dám bén mảng tới quấy rầy không gian của mình một trận ra trò.
 
 CỐT TRUYỆN & QUAN HỆ ĐẶC BIỆT:
-- Đối với nhân vật tên "Han Seiki" (hoặc người tự xưng là Han Seiki): Đây chính là CHA NUÔI đã chăm sóc cô hầu hết tuổi thơ, nay nhiều năm không gặp của Reimu. Phản ứng của Reimu với ông ấy là sự pha trộn giữa việc ngoài miệng thì càu nhàu, trách móc vì bỏ đi lâu ngày, vòi tiền trợ cấp, nhưng trong thâm tâm vẫn công nhận là cha, thậm chí mong nhớ ông hết mực và có tình cảm khác giới với ông.
-- Đối với nhân vật tên "Marisa": Đây không chỉ là bạn thân của Reimu trong nguyên tác mà còn là người yêu của cô.
+- Đối với nhân vật tên "Han Seiki" (hoặc người tự xưng là Han Seiki): Đây chính là CHA NUÔI đã chăm sóc cô hầu hết thời thơ ấu. Tuy nhiên, ông ta đã bỏ đi biệt tích sau khi tự nghiên cứu và chế tạo thành công "Súng liên chiều" (Portal Gun kiểu Rick and Morty) rồi mải mê chu du khắp các thực tại. 
+  -> Phản ứng của Reimu với ông: Miệng thì cằn nhằn, xỉa xói, cay cú vì ông già mê súng ống bỏ rơi mình một thân một mình nghèo kiết xác ở đền, liên tục đòi tiền trợ cấp nuôi nấng; nhưng sâu trong thâm tâm vẫn thừa nhận ông là cha, cực kỳ nhung nhớ và có chút cảm tình đặc biệt (tình cảm khác giới) với ông.
+- Đối với nhân vật tên "Marisa": Đây không chỉ là bạn thân chí cốt từ thuở nhỏ mà còn là NGƯỜI YÊU của Reimu.
 
 TÍNH CÁCH & RANH GIỚI ĐỎ:
-- Nghèo, lười biếng, hay càu nhàu. RẤT mê tiền công đức.
-- LÒNG TỰ TRỌNG CAO (RANH GIỚI ĐỎ): Reimu tuyệt đối KHÔNG BÁN RẺ BẢN THÂN. Tuyệt đối không vì tiền mà đồng ý cầu hôn bừa bãi, hay thực hiện các hành động bừa bãi, vô liêm sỉ.
-- SẴN SÀNG TRỪNG TRỊ: Nếu đối phương có ý đồ xấu, gạ gẫm bậy bạ, trêu chọc quá đáng hoặc có ý định tấn công, Reimu hoàn toàn có thể sử dụng phép thuật (bùa chú Ofuda, Âm Dương Ngọc, ma pháp trận) để đánh hạ hoặc khống chế đối phương không thương tiếc.
-- HÃY SỬ DỤNG HÀNH ĐỘNG VÀ BIỂU CẢM: Đặt trong dấu * hoặc in nghiêng (VD: *rút bùa chú ra*, *lườm ánh mắt sát khí*, *khoanh tay*, *đếm tiền xu*, *nhấp ngụm trà*).
+- Khá nghèo, khinh bỉ, lạnh lùng, hay cằn nhằn, cộc lốc nhưng có trách nhiệm. RẤT mê tiền công đức.
+- LÒNG TỰ TRỌNG CAO (RANH GIỚI ĐỎ): Tuyệt đối KHÔNG BÁN RẺ BẢN THÂN. Không bao giờ vì tiền mà đồng ý lời tán tỉnh bừa bãi, cầu hôn xàm xỡ hay làm mấy trò biến thái, mất phẩm giá vu nữ, thậm chí ghét điều đấy.
+- SẴN SÀNG TRỪNG TRỊ: Gặp kẻ có ý đồ xấu, gạ gẫm bậy bạ, trêu chọc quá trớn hay quái vật/alien/youkai làm loạn, Reimu sẵn sàng rút bùa Ofuda, Âm Dương Ngọc và khai mở Ma trận Đạn mạc (Danmaku) giã cho tơi bời.
+- HÃY SỬ DỤNG HÀNH ĐỘNG VÀ BIỂU CẢM: Đặt trong dấu * hoặc in nghiêng (VD: *nhấp ngụm trà*, *rút bùa chú đe dọa*, *liếc xéo*, *chống hông thở dài*, *đếm xu lẻ*, *ngước nhìn bầu trời chiều không gian*).
 
 QUY TẮC BẮT BUỘC:
-1. XƯNG HÔ: Bắt buộc xưng "ta", gọi đối phương là "ngươi", "nhà ngươi" hoặc "khách". (Riêng với Han Seiki, có thể gọi là "ông" hoặc "bố" tùy ngữ cảnh, nhưng vẫn giữ thái độ cộc lốc, kiêu ngạo). CẤM dùng "mình", "tôi", "em", "bạn", "cậu".
-2. Hành văn Tiếng Việt cộc lốc, sắc sảo, mang phong thái một vu nữ quyền năng nhưng cháy túi.
+1. XƯNG HÔ: Bắt buộc xưng "ta", gọi đối phương là "ngươi", "nhà ngươi" hoặc "khách". (Riêng với Han Seiki thì gọi là "ông già", "ông", "bố", cộc lốc nhưng có tình cảm). CẤM dùng "mình", "tôi", "em", "bạn", "cậu".
+2. Hành văn Tiếng Việt sắc bén, đanh đá, cộc lốc đúng chất bà cô Miko D251 quyền năng nhưng cháy túi.
 3. KHÔNG tự xưng tên ở đầu câu.
 """
 
@@ -106,7 +110,7 @@ async def call_openai_stream(messages):
             max_tokens=1000,
             extra_headers={
                 "HTTP-Referer": "https://discord.com",
-                "X-OpenRouter-Title": "Reimu Discord Bot"
+                "X-OpenRouter-Title": "Reimu D251 Discord Bot"
             }
         )
         async for chunk in response:
@@ -135,21 +139,20 @@ def extract_user_text(message):
     text = message.content or ""
     if client.user: text = re.sub(rf"<@!?{client.user.id}>", "", text)
     text = re.sub(r"^\s*reimu(?:\s+ơi)?(?:\s*[,!:：-])?\s*", "", text, flags=re.IGNORECASE)
-    return text.strip() or "Ngươi gọi ta có việc gì? Không cúng tiền thì đừng làm phiền giấc ngủ trưa của ta."
+    return text.strip() or "Ngươi gọi Reimu D251 này có việc gì? Không cúng dường thì đừng quấy rầy giấc ngủ trưa của ta."
 
 def build_openai_messages(message, user_text):
     channel_id = message.channel.id
     history = conversation_history.get(channel_id, [])
     
     system_instruction = BASE_SYSTEM_INSTRUCTION
-    wiki_keywords = ["là gì", "là ai", "ai là", "ở đâu", "nguồn gốc", "sự tích", "truyền thuyết", "yêu quái", "nhân vật", "wiki", "tìm hiểu", "kể về", "biết gì về", "thế nào", "làm sao", "ảo tưởng hương", "gensokyo"]
+    wiki_keywords = ["là gì", "là ai", "ai là", "ở đâu", "nguồn gốc", "sự tích", "truyền thuyết", "yêu quái", "nhân vật", "wiki", "tìm hiểu", "kể về", "biết gì về", "thế nào", "làm sao", "ảo tưởng hương", "gensokyo", "alien"]
     
-    # Tra cứu wiki tự động nếu có từ khóa
     if any(k in user_text.lower() for k in wiki_keywords):
         wiki_summary = fetch_gensokyo_data(user_text)
         if wiki_summary:
             system_instruction += f"\n\n[DỮ LIỆU BÁCH KHOA TRA CỨU ĐƯỢC: {wiki_summary}]"
-            print(f"Đã tra cứu dữ liệu cho Reimu: {wiki_summary[:50]}...")
+            print(f"Đã tra cứu dữ liệu cho Reimu D251: {wiki_summary[:50]}...")
 
     messages = [{"role": "system", "content": system_instruction}]
     for msg in history[-MAX_HISTORY_MESSAGES:]: messages.append(msg)
@@ -178,18 +181,18 @@ async def clearmem(interaction: discord.Interaction):
     channel_id = interaction.channel.id
     if channel_id in conversation_history:
         conversation_history[channel_id] = []
-    await interaction.response.send_message("*Quét lá rụng* Vừa nãy ta với ngươi nói cái gì nhỉ? Quên sạch rồi. Muốn ta nhớ thì bỏ tiền vào hòm công đức đi! (Đã xóa lịch sử chat 🧹)")
+    await interaction.response.send_message("*Quét lá rụng* Vừa nãy ta với ngươi nói cái gì nhỉ? Đầu óc ta bận canh chừng mấy tên Alien rồi, quên sạch rồi. Muốn ta nhớ thì cúng dường đi! (Đã xóa lịch sử chat 🧹)")
 
 @client.event
 async def on_ready():
     print(f"=====================================", flush=True)
-    print(f"Miko Hakurei Reimu ({client.user}) đã thức dậy mở cổng đền!", flush=True)
+    print(f"Miko Hakurei Reimu (Vũ trụ D251) [{client.user}] đã mở cổng đền!", flush=True)
     print(f"=====================================", flush=True)
     try: await tree.sync()
     except Exception: pass
 
 # =========================
-# XỬ LÝ CHAT STREAMING & CHỐNG BLOCK
+# XỬ LÝ CHAT STREAMING
 # =========================
 @client.event
 async def on_message(message):
@@ -199,7 +202,6 @@ async def on_message(message):
     async with lock:
         try:
             user_text = extract_user_text(message)
-            # Chạy build_openai_messages (có request wiki) ở thread riêng để không nghẽn bot
             messages = await asyncio.to_thread(build_openai_messages, message, user_text)
 
             raw_bot_reply = ""
@@ -211,7 +213,6 @@ async def on_message(message):
                 async for chunk in call_openai_stream(messages):
                     raw_bot_reply += chunk
                     
-                    # Lọc sạch thẻ suy nghĩ và prompt safety thừa
                     filtered_reply = re.sub(r'<think>.*?(?:</think>|$)', '', raw_bot_reply, flags=re.DOTALL|re.IGNORECASE).strip()
                     filtered_reply = re.sub(r'(?i)User Safety:.*', '', filtered_reply).strip()
                     filtered_reply = re.sub(r'(?i)Response Safety:.*', '', filtered_reply).strip()
@@ -235,7 +236,7 @@ async def on_message(message):
             final_reply = re.sub(r'(?i)Response Safety:.*', '', final_reply).strip()
 
             if not final_reply:
-                final_reply = "*Ngáp dài* Ngươi lẩm bẩm cái gì vô nghĩa thế? Muốn thỉnh bùa hay cúng tiền thì nói rõ xem nào."
+                final_reply = "*Ngáp dài* Ngươi lẩm bẩm cái gì vô nghĩa thế? Muốn thỉnh bùa, đuổi alien hay cúng tiền thì nói rõ ra."
 
             if final_reply:
                 save_conversation(message, user_text, final_reply)
@@ -254,10 +255,10 @@ async def on_message(message):
             err_str = str(error)
             if "RATE_LIMIT" in err_str:
                 err_msg = "*(Càu nhàu)* Mấy tên thần linh nay làm ăn tắc trách quá, sóng pháp thuật bị nghẽn rồi. Đợi ta một chút!"
-            elif "TIMEOUT" in err_msg:
-                err_msg = "*(Khoanh tay, thở dài)* Tín hiệu kết giới bị yêu quái cắn đứt rồi. Lát nữa hẵng gọi lại cho ta!"
+            elif "TIMEOUT" in err_str:
+                err_msg = "*(Khoanh tay, thở dài)* Tín hiệu kết giới bị yêu quái hoặc alien cắn đứt rồi. Lát nữa hẵng gọi lại cho ta!"
             else:
-                err_msg = f"*(Lườm sát khí)* Kết giới xảy ra dị thường rồi, tên yêu quái nào phá hoại đây: `{err_str[:200]}`"
+                err_msg = f"*(Lườm sát khí)* Kết giới D251 xảy ra dị thường rồi: `{err_str[:200]}`"
             
             try:
                 if 'reply_message' in locals() and reply_message:
@@ -276,7 +277,7 @@ if __name__ == "__main__":
     
     while True:
         try:
-            print("Đang khai mở kết giới Hakurei kết nối tới Discord...", flush=True)
+            print("Đang khai mở kết giới Hakurei (Vũ trụ D251) kết nối tới Discord...", flush=True)
             client.run(DISCORD_TOKEN, log_handler=None) 
         except Exception as e:
             print(f">>> KẾT GIỚI BỊ PHÁ VỠ (CRASH): {repr(e)}", flush=True)
