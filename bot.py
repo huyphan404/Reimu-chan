@@ -9,9 +9,7 @@ import requests
 import discord
 from discord import app_commands
 from flask import Flask
-
-# Dùng thư viện ổn định nhất của Google
-import google.generativeai as genai
+from openai import AsyncOpenAI
 
 # =========================
 # HEALTH CHECK
@@ -33,17 +31,20 @@ def keep_alive():
 # CẤU HÌNH API
 # =========================
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-
-# Cấu hình SDK với API Key
-genai.configure(api_key=GEMINI_API_KEY)
-
-# Khôi phục lấy model từ cấu hình ENV
-GEMINI_MODEL_NAME = os.getenv("GEMINI_MODEL", "models/gemini-1.5-flash").strip()
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gemini-1.5-flash").strip()
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai/").strip().rstrip('/')
 
 MAX_HISTORY_MESSAGES = 8
 try: CHAT_CHANNEL_ID = int(os.getenv("CHAT_CHANNEL_ID", "0") or "0")
 except ValueError: CHAT_CHANNEL_ID = 0
+
+# KHỞI TẠO CLIENT OPENAI
+aclient = AsyncOpenAI(
+    base_url=OPENAI_BASE_URL,
+    api_key=OPENAI_API_KEY,
+    timeout=30.0 
+)
 
 # =========================
 # TRA CỨU BÁCH KHOA TOÀN THƯ (WIKIPEDIA) 
@@ -90,48 +91,32 @@ conversation_history = {}
 channel_locks = {}
 
 # =========================
-# GỌI API (SỬ DỤNG BỘ NÃO GEMINI)
+# GỌI API (SỬ DỤNG OPENAI SDK)
 # =========================
-async def call_gemini_stream(history_contents, user_text, system_inst):
+async def call_openai_stream(messages):
     try:
-        # Khởi tạo model với system instruction
-        model = genai.GenerativeModel(
-            model_name=GEMINI_MODEL_NAME,
-            system_instruction=system_inst
-        )
-        
-        # Chuyển đổi định dạng lịch sử sang định dạng Gemini cần
-        formatted_history = []
-        for msg in history_contents:
-            role = "user" if msg['role'] == "user" else "model"
-            formatted_history.append({"role": role, "parts": [msg['content']]})
-            
-        # Nạp lịch sử vào chat session
-        chat = model.start_chat(history=formatted_history)
-        
-        # Gọi API stream
-        response = await asyncio.to_thread(
-            chat.send_message,
-            user_text,
+        response = await aclient.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=messages,
             stream=True,
-            generation_config=genai.types.GenerationConfig(
-                temperature=0.8,
-                max_output_tokens=800,
-            )
+            temperature=0.8,
+            # ĐÃ XÓA DÒNG frequency_penalty Ở ĐÂY
+            max_tokens=800,
+            extra_headers={
+                "HTTP-Referer": "https://discord.com",
+                "X-OpenRouter-Title": "Reimu Discord Bot"
+            }
         )
-        
-        for chunk in response:
-            if chunk.text:
-                yield chunk.text
-
+        async for chunk in response:
+            if chunk.choices and chunk.choices[0].delta.content:
+                yield chunk.choices[0].delta.content
     except Exception as e:
         err_msg = str(e)
-        if "429" in err_msg or "quota" in err_msg.lower():
+        if "429" in err_msg or "rate limit" in err_msg.lower():
             raise RuntimeError("RATE_LIMIT")
         elif "timeout" in err_msg.lower():
             raise RuntimeError("TIMEOUT")
         raise RuntimeError(f"Lỗi mạng: {err_msg}")
-
 
 # =========================
 # LỊCH SỬ & TIN NHẮN
@@ -150,6 +135,24 @@ def extract_user_text(message):
     text = re.sub(r"^\s*reimu(?:\s+ơi)?(?:\s*[,!:：-])?\s*", "", text, flags=re.IGNORECASE)
     return text.strip() or "Ngươi gọi ta có việc gì?"
 
+def build_openai_messages(message, user_text):
+    channel_id = message.channel.id
+    history = conversation_history.get(channel_id, [])
+    
+    # KÍCH HOẠT KỸ NĂNG TRA CỨU NẾU CÓ TỪ KHÓA
+    system_instruction = SYSTEM_INSTRUCTION
+    wiki_keywords = ["là gì", "là ai", "ai là", "ở đâu", "nguồn gốc", "sự tích", "truyền thuyết", "yêu quái", "nhân vật", "wiki", "tìm hiểu", "kể về", "biết gì về", "thế nào", "làm sao"]
+    
+    if any(k in user_text.lower() for k in wiki_keywords):
+        wiki_summary = fetch_gensokyo_data(user_text)
+        if wiki_summary:
+            system_instruction += f"\n\n[DỮ LIỆU BÁCH KHOA TRA CỨU ĐƯỢC TỪ TỪ ĐIỂN: {wiki_summary}]"
+            print(f"Đã tra cứu dữ liệu cho Reimu: {wiki_summary[:50]}...")
+
+    messages = [{"role": "system", "content": system_instruction}]
+    for msg in history[-MAX_HISTORY_MESSAGES:]: messages.append(msg)
+    messages.append({"role": "user", "content": f"{message.author.display_name}: {user_text}"})
+    return messages
 
 def save_conversation(message, user_text, bot_reply):
     channel_id = message.channel.id
@@ -178,7 +181,7 @@ async def clearmem(interaction: discord.Interaction):
 @client.event
 async def on_ready():
     print(f"=====================================", flush=True)
-    print(f"Miko {client.user} đã sẵn sàng với não Gemini ổn định!", flush=True)
+    print(f"Miko {client.user} đã sẵn sàng!", flush=True)
     print(f"=====================================", flush=True)
     try: await tree.sync()
     except Exception: pass
@@ -194,17 +197,7 @@ async def on_message(message):
     async with lock:
         try:
             user_text = extract_user_text(message)
-            channel_id = message.channel.id
-            history = conversation_history.get(channel_id, [])
-            
-            system_instruction = SYSTEM_INSTRUCTION
-            wiki_keywords = ["là gì", "là ai", "ai là", "ở đâu", "nguồn gốc", "sự tích", "truyền thuyết", "yêu quái", "nhân vật", "wiki", "tìm hiểu", "kể về", "biết gì về", "thế nào", "làm sao"]
-            
-            if any(k in user_text.lower() for k in wiki_keywords):
-                wiki_summary = await asyncio.to_thread(fetch_gensokyo_data, user_text)
-                if wiki_summary:
-                    system_instruction += f"\n\n[DỮ LIỆU BÁCH KHOA TRA CỨU ĐƯỢC TỪ TỪ ĐIỂN: {wiki_summary}]"
-                    print(f"Đã tra cứu dữ liệu cho Reimu: {wiki_summary[:50]}...")
+            messages = await asyncio.to_thread(build_openai_messages, message, user_text)
 
             raw_bot_reply = ""
             reply_message = None
@@ -212,12 +205,13 @@ async def on_message(message):
             edit_interval = 2.0
 
             async with message.channel.typing():
-                # Gọi API Gemini
-                async for chunk in call_gemini_stream(history, user_text, system_instruction):
+                async for chunk in call_openai_stream(messages):
                     raw_bot_reply += chunk
                     
                     filtered_reply = re.sub(r'<think>.*?(?:</think>|$)', '', raw_bot_reply, flags=re.DOTALL|re.IGNORECASE).strip()
-                    
+                    filtered_reply = re.sub(r'(?i)User Safety:.*', '', filtered_reply).strip()
+                    filtered_reply = re.sub(r'(?i)Response Safety:.*', '', filtered_reply).strip()
+
                     now = time.time()
                     if now - last_edit_time > edit_interval:
                         display_text = filtered_reply
@@ -233,6 +227,8 @@ async def on_message(message):
                         last_edit_time = now
 
             final_reply = re.sub(r'<think>.*?(?:</think>|$)', '', raw_bot_reply, flags=re.DOTALL|re.IGNORECASE).strip()
+            final_reply = re.sub(r'(?i)User Safety:.*', '', final_reply).strip()
+            final_reply = re.sub(r'(?i)Response Safety:.*', '', final_reply).strip()
 
             if not final_reply:
                 final_reply = "*Quét lá rụng* Ngươi lẩm bẩm gì đấy? Cúng tiền thì hẵng nói chuyện tiếp."
