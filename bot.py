@@ -9,9 +9,9 @@ import requests
 import discord
 from discord import app_commands
 from flask import Flask
-# CHÚ Ý: Đã thay đổi thư viện ở đây
-from google import genai
-from google.genai import types
+
+# Dùng thư viện ổn định nhất của Google
+import google.generativeai as genai
 
 # =========================
 # HEALTH CHECK
@@ -33,16 +33,17 @@ def keep_alive():
 # CẤU HÌNH API
 # =========================
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-# Chuyển sang dùng biến môi trường của Gemini
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash").strip()
+
+# Cấu hình SDK với API Key
+genai.configure(api_key=GEMINI_API_KEY)
+
+# Không cần lấy tên model từ ENV nữa, fix cứng model ổn định nhất
+GEMINI_MODEL_NAME = "gemini-1.5-flash"
 
 MAX_HISTORY_MESSAGES = 8
 try: CHAT_CHANNEL_ID = int(os.getenv("CHAT_CHANNEL_ID", "0") or "0")
 except ValueError: CHAT_CHANNEL_ID = 0
-
-# KHỞI TẠO CLIENT GEMINI (BỘ NÃO CHÍNH CHỦ)
-gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 
 # =========================
 # TRA CỨU BÁCH KHOA TOÀN THƯ (WIKIPEDIA) 
@@ -93,29 +94,30 @@ channel_locks = {}
 # =========================
 async def call_gemini_stream(history_contents, user_text, system_inst):
     try:
-        # Chuẩn bị cấu hình
-        config = types.GenerateContentConfig(
-            system_instruction=system_inst,
-            temperature=0.8,
-            max_output_tokens=800,
+        # Khởi tạo model với system instruction
+        model = genai.GenerativeModel(
+            model_name=GEMINI_MODEL_NAME,
+            system_instruction=system_inst
         )
         
-        # Nối lịch sử vào câu nói hiện tại của user để làm prompt
-        full_prompt = ""
+        # Chuyển đổi định dạng lịch sử sang định dạng Gemini cần
+        formatted_history = []
         for msg in history_contents:
-            if msg['role'] == 'user':
-                full_prompt += f"Khách nói: {msg['content']}\n"
-            else:
-                full_prompt += f"Reimu nói: {msg['content']}\n"
+            role = "user" if msg['role'] == "user" else "model"
+            formatted_history.append({"role": role, "parts": [msg['content']]})
+            
+        # Nạp lịch sử vào chat session
+        chat = model.start_chat(history=formatted_history)
         
-        full_prompt += f"Khách nói: {user_text}\nReimu trả lời:"
-
         # Gọi API stream
         response = await asyncio.to_thread(
-            gemini_client.models.generate_content_stream,
-            model=GEMINI_MODEL,
-            contents=full_prompt,
-            config=config
+            chat.send_message,
+            user_text,
+            stream=True,
+            generation_config=genai.types.GenerationConfig(
+                temperature=0.8,
+                max_output_tokens=800,
+            )
         )
         
         for chunk in response:
@@ -176,7 +178,7 @@ async def clearmem(interaction: discord.Interaction):
 @client.event
 async def on_ready():
     print(f"=====================================", flush=True)
-    print(f"Miko {client.user} đã sẵn sàng với não Gemini!", flush=True)
+    print(f"Miko {client.user} đã sẵn sàng với não Gemini ổn định!", flush=True)
     print(f"=====================================", flush=True)
     try: await tree.sync()
     except Exception: pass
