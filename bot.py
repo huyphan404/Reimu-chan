@@ -1,12 +1,10 @@
 import asyncio
-import json
-import logging
 import os
 import re
 import time
 from threading import Thread
-import urllib.parse
 import requests
+import urllib.parse
 
 import discord
 from discord import app_commands
@@ -34,7 +32,6 @@ def keep_alive():
 # =========================
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-# Đã sửa lại giá trị mặc định thành minimax để đồng bộ với môi trường của bạn
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "minimax/minimax-m3:free").strip()
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://openrouter.ai/api/v1").strip().rstrip('/')
 
@@ -43,16 +40,16 @@ try: CHAT_CHANNEL_ID = int(os.getenv("CHAT_CHANNEL_ID", "0") or "0")
 except ValueError: CHAT_CHANNEL_ID = 0
 
 # KHỞI TẠO CLIENT OPENAI
-# Thêm max_retries=0 để tránh OpenAI client tự động retry gây treo log khi bị 429
+# Để lại max_retries mặc định (thường là 2) để SDK tự lo một phần, 
+# ta sẽ bọc thêm try/except ở hàm gọi API để xử lý triệt để hơn.
 aclient = AsyncOpenAI(
     base_url=OPENAI_BASE_URL,
     api_key=OPENAI_API_KEY,
-    timeout=30.0,
-    max_retries=0
+    timeout=45.0, # Tăng timeout lên để tránh lỗi do API phản hồi chậm
 )
 
 # =========================
-# TRA CỨU BÁCH KHOA TOÀN THƯ (WIKIPEDIA) 
+# TRA CỨU BÁCH KHOA TOÀN THƯ (WIKIPEDIA)
 # =========================
 def fetch_gensokyo_data(query):
     """Lấy tóm tắt từ Wikipedia tiếng Việt để Reimu có thêm thông tin chính xác"""
@@ -96,32 +93,51 @@ conversation_history = {}
 channel_locks = {}
 
 # =========================
-# GỌI API (SỬ DỤNG OPENAI SDK)
+# GỌI API (SỬ DỤNG OPENAI SDK CÓ RETRY)
 # =========================
 async def call_openai_stream(messages):
-    try:
-        response = await aclient.chat.completions.create(
-            model=OPENAI_MODEL,
-            messages=messages,
-            stream=True,
-            temperature=0.8,
-            frequency_penalty=0.2,
-            max_tokens=800,
-            extra_headers={
-                "HTTP-Referer": "https://discord.com",
-                "X-OpenRouter-Title": "Reimu Discord Bot"
-            }
-        )
-        async for chunk in response:
-            if chunk.choices and chunk.choices[0].delta.content:
-                yield chunk.choices[0].delta.content
-    except Exception as e:
-        err_msg = str(e)
-        if "429" in err_msg or "rate limit" in err_msg.lower():
-            raise RuntimeError("RATE_LIMIT")
-        elif "timeout" in err_msg.lower():
-            raise RuntimeError("TIMEOUT")
-        raise RuntimeError(f"Lỗi mạng: {err_msg}")
+    max_retries = 3
+    base_delay = 2.0  # Thời gian chờ cơ bản (giây)
+
+    for attempt in range(max_retries):
+        try:
+            response = await aclient.chat.completions.create(
+                model=OPENAI_MODEL,
+                messages=messages,
+                stream=True,
+                temperature=0.8,
+                frequency_penalty=0.2,
+                max_tokens=800,
+                extra_headers={
+                    "HTTP-Referer": "https://discord.com",
+                    "X-OpenRouter-Title": "Reimu Discord Bot" 
+                }
+            )
+            async for chunk in response:
+                if chunk.choices and chunk.choices[0].delta.content:
+                    yield chunk.choices[0].delta.content
+            # Nếu gọi thành công và stream xong, thoát khỏi vòng lặp retry
+            return
+
+        except Exception as e:
+            err_msg = str(e).lower()
+            # Xử lý các lỗi có khả năng tự phục hồi (429 Rate Limit, 502/503/504 Bad Gateway/Timeout)
+            is_recoverable = any(k in err_msg for k in ["429", "rate limit", "502", "503", "504", "timeout"])
+            
+            if is_recoverable and attempt < max_retries - 1:
+                # Tính thời gian chờ tăng dần (exponential backoff): 2s -> 4s
+                sleep_time = base_delay * (2 ** attempt)
+                print(f"[API WARN] Lỗi {err_msg[:30]}... Đang thử lại (Lần {attempt + 1}/{max_retries}) sau {sleep_time}s")
+                await asyncio.sleep(sleep_time)
+                continue
+            
+            # Nếu hết số lần retry hoặc gặp lỗi không thể phục hồi (như sai API key)
+            if "429" in err_msg or "rate limit" in err_msg:
+                raise RuntimeError("RATE_LIMIT")
+            elif "timeout" in err_msg: 
+                raise RuntimeError("TIMEOUT")
+            else:
+                raise RuntimeError(f"Lỗi mạng: {err_msg}")
 
 # =========================
 # LỊCH SỬ & TIN NHẮN
@@ -140,9 +156,6 @@ def extract_user_text(message):
     text = re.sub(r"^\s*reimu(?:\s+ơi)?(?:\s*[,!:：-])?\s*", "", text, flags=re.IGNORECASE)
     return text.strip() or "Ngươi gọi ta có việc gì?"
 
-# =========================
-# XỬ LÝ MESSAGES & WIKI 
-# =========================
 def build_openai_messages(message, user_text):
     channel_id = message.channel.id
     history = conversation_history.get(channel_id, [])
@@ -210,7 +223,7 @@ async def on_message(message):
             raw_bot_reply = ""
             reply_message = None
             last_edit_time = 0
-            edit_interval = 2.0
+            edit_interval = 2.0 
 
             async with message.channel.typing():
                 async for chunk in call_openai_stream(messages):
@@ -271,7 +284,7 @@ async def on_message(message):
             except discord.DiscordException: pass
 
 # =========================
-# VÒNG LẶP CHỐNG CRASH
+# VÒNG LẶP CHỐNG CRASH VÀ ÉP LỖI HIỆN LÊN LOG
 # =========================
 discord.utils.setup_logging()
 
@@ -284,5 +297,5 @@ if __name__ == "__main__":
             client.run(DISCORD_TOKEN, log_handler=None)
         except Exception as e:
             print(f">>> LỖI CRASH RỒI: {repr(e)}", flush=True)
-            print("Đang chờ 30s để thử lại...", flush=True)
+            print("Đang chờ 30s để thử lại...", flush=True) 
             time.sleep(30)
