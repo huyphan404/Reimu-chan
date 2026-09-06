@@ -41,7 +41,7 @@ MAX_HISTORY_MESSAGES = 8
 try: CHAT_CHANNEL_ID = int(os.getenv("CHAT_CHANNEL_ID", "0") or "0")
 except ValueError: CHAT_CHANNEL_ID = 0
 
-# KHỞI TẠO CLIENT OPENAI (Khôi phục y hệt Senku, không can thiệp max_retries)
+# KHỞI TẠO CLIENT OPENAI
 aclient = AsyncOpenAI(
     base_url=OPENAI_BASE_URL,
     api_key=OPENAI_API_KEY,
@@ -102,7 +102,6 @@ async def call_openai_stream(messages):
             messages=messages,
             stream=True,
             temperature=0.8,
-            frequency_penalty=0.2,
             max_tokens=800,
             extra_headers={
                 "HTTP-Referer": "https://discord.com",
