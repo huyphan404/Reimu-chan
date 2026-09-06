@@ -34,7 +34,8 @@ def keep_alive():
 # =========================
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "openrouter/free").strip()
+# Đã sửa lại giá trị mặc định thành minimax để đồng bộ với môi trường của bạn
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "minimax/minimax-m3:free").strip()
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://openrouter.ai/api/v1").strip().rstrip('/')
 
 MAX_HISTORY_MESSAGES = 8
@@ -42,15 +43,16 @@ try: CHAT_CHANNEL_ID = int(os.getenv("CHAT_CHANNEL_ID", "0") or "0")
 except ValueError: CHAT_CHANNEL_ID = 0
 
 # KHỞI TẠO CLIENT OPENAI
+# Thêm max_retries=0 để tránh OpenAI client tự động retry gây treo log khi bị 429
 aclient = AsyncOpenAI(
     base_url=OPENAI_BASE_URL,
     api_key=OPENAI_API_KEY,
-    timeout=30.0
+    timeout=30.0,
+    max_retries=0
 )
 
 # =========================
 # TRA CỨU BÁCH KHOA TOÀN THƯ (WIKIPEDIA) 
-# (ĐÃ ĐỒNG BỘ CẤU TRÚC VỚI SENKU)
 # =========================
 def fetch_gensokyo_data(query):
     """Lấy tóm tắt từ Wikipedia tiếng Việt để Reimu có thêm thông tin chính xác"""
@@ -139,13 +141,13 @@ def extract_user_text(message):
     return text.strip() or "Ngươi gọi ta có việc gì?"
 
 # =========================
-# XỬ LÝ MESSAGES & WIKI (ĐÃ ĐỒNG BỘ VỚI SENKU)
+# XỬ LÝ MESSAGES & WIKI 
 # =========================
 def build_openai_messages(message, user_text):
     channel_id = message.channel.id
     history = conversation_history.get(channel_id, [])
     
-    # KÍCH HOẠT KỸ NĂNG TRA CỨU NẾU CÓ TỪ KHÓA (Theo phong cách Senku)
+    # KÍCH HOẠT KỸ NĂNG TRA CỨU NẾU CÓ TỪ KHÓA
     system_instruction = SYSTEM_INSTRUCTION
     wiki_keywords = ["là gì", "là ai", "ai là", "ở đâu", "nguồn gốc", "sự tích", "truyền thuyết", "yêu quái", "nhân vật", "wiki", "tìm hiểu", "kể về", "biết gì về", "thế nào", "làm sao"]
     
