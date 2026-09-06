@@ -38,8 +38,8 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 # Cấu hình SDK với API Key
 genai.configure(api_key=GEMINI_API_KEY)
 
-# Không cần lấy tên model từ ENV nữa, fix cứng model ổn định nhất
-GEMINI_MODEL_NAME = "gemini-1.5-flash"
+# Khôi phục lấy model từ cấu hình ENV
+GEMINI_MODEL_NAME = os.getenv("GEMINI_MODEL", "models/gemini-1.5-flash").strip()
 
 MAX_HISTORY_MESSAGES = 8
 try: CHAT_CHANNEL_ID = int(os.getenv("CHAT_CHANNEL_ID", "0") or "0")
