@@ -40,12 +40,13 @@ try: CHAT_CHANNEL_ID = int(os.getenv("CHAT_CHANNEL_ID", "0") or "0")
 except ValueError: CHAT_CHANNEL_ID = 0
 
 # KHỞI TẠO CLIENT OPENAI
-# Để lại max_retries mặc định (thường là 2) để SDK tự lo một phần, 
-# ta sẽ bọc thêm try/except ở hàm gọi API để xử lý triệt để hơn.
+# Để max_retries=0 để vô hiệu hóa tính năng tự động thử lại "âm thầm" của thư viện.
+# Ta sẽ bọc thêm try/except ở hàm gọi API để tự kiểm soát log và thời gian chờ.
 aclient = AsyncOpenAI(
     base_url=OPENAI_BASE_URL,
     api_key=OPENAI_API_KEY,
     timeout=45.0, # Tăng timeout lên để tránh lỗi do API phản hồi chậm
+    max_retries=0
 )
 
 # =========================
@@ -93,7 +94,7 @@ conversation_history = {}
 channel_locks = {}
 
 # =========================
-# GỌI API (SỬ DỤNG OPENAI SDK CÓ RETRY)
+# GỌI API (SỬ DỤNG OPENAI SDK CÓ RETRY TỰ ĐIỀU CHỈNH)
 # =========================
 async def call_openai_stream(messages):
     max_retries = 3
@@ -127,7 +128,7 @@ async def call_openai_stream(messages):
             if is_recoverable and attempt < max_retries - 1:
                 # Tính thời gian chờ tăng dần (exponential backoff): 2s -> 4s
                 sleep_time = base_delay * (2 ** attempt)
-                print(f"[API WARN] Lỗi {err_msg[:30]}... Đang thử lại (Lần {attempt + 1}/{max_retries}) sau {sleep_time}s")
+                print(f"[API WARN] Lỗi {err_msg[:30]}... Đang thử lại (Lần {attempt + 1}/{max_retries}) sau {sleep_time}s", flush=True)
                 await asyncio.sleep(sleep_time)
                 continue
             
@@ -168,7 +169,7 @@ def build_openai_messages(message, user_text):
         wiki_summary = fetch_gensokyo_data(user_text)
         if wiki_summary:
             system_instruction += f"\n\n[DỮ LIỆU BÁCH KHOA TRA CỨU ĐƯỢC TỪ TỪ ĐIỂN: {wiki_summary}]"
-            print(f"Đã tra cứu dữ liệu cho Reimu: {wiki_summary[:50]}...")
+            print(f"Đã tra cứu dữ liệu cho Reimu: {wiki_summary[:50]}...", flush=True)
 
     messages = [{"role": "system", "content": system_instruction}]
     for msg in history[-MAX_HISTORY_MESSAGES:]: messages.append(msg)
