@@ -3,25 +3,22 @@ import os
 import re
 import time
 from threading import Thread
-import urllib.parse
 import requests
+import urllib.parse
 
 import discord
 from discord import app_commands
 from flask import Flask
-
-# Import SDK Gemini mới của Google
-from google import genai
-from google.genai import types
+from openai import AsyncOpenAI
 
 # =========================
-# HEALTH CHECK (GIỮ SERVER SỐNG)
+# HEALTH CHECK
 # =========================
 app = Flask(__name__)
 
 @app.get("/")
 def home():
-    return "Miko Hakurei Reimu (Vũ trụ D251) đang trực đền và đếm tiền công đức!"
+    return "Miko Hakurei Reimu đang trực đền và đếm tiền công đức!"
 
 def run_health_server():
     port = int(os.getenv("PORT", "10000"))
@@ -34,56 +31,37 @@ def keep_alive():
 # CẤU HÌNH API
 # =========================
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("OPENAI_API_KEY")
-# Dùng Flash cho tốc độ cao và ít nghẽn mạng
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash").strip()
+# Hỗ trợ nhiều key cách nhau bằng dấu phẩy
+api_keys_env = os.getenv("OPENAI_API_KEYS") or os.getenv("OPENAI_API_KEY", "")
+API_KEYS = [k.strip() for k in api_keys_env.split(",") if k.strip()]
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "minimax/minimax-m3:free").strip()
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://openrouter.ai/api/v1").strip().rstrip('/')
 
 MAX_HISTORY_MESSAGES = 8
 try: CHAT_CHANNEL_ID = int(os.getenv("CHAT_CHANNEL_ID", "0") or "0")
 except ValueError: CHAT_CHANNEL_ID = 0
 
-aclient = genai.Client(api_key=GEMINI_API_KEY)
+import itertools
+
+# KHỞI TẠO DANH SÁCH CLIENT OPENAI ĐỂ LUÂN PHIÊN (ROUND-ROBIN)
+if not API_KEYS:
+    print("⚠️ CẢNH BÁO: Chưa cấu hình OPENAI_API_KEYS hoặc OPENAI_API_KEY!")
+    API_KEYS = ["dummy_key"]
+
+clients = [
+    AsyncOpenAI(
+        base_url=OPENAI_BASE_URL,
+        api_key=key,
+        timeout=30.0 
+    ) for key in API_KEYS
+]
+client_cycle = itertools.cycle(clients)
 
 # =========================
-# CƠ CHẾ AUTO-FALLBACK TÌM MODEL SỐNG (TỐI ƯU CACHE)
+# TRA CỨU BÁCH KHOA TOÀN THƯ (WIKIPEDIA)
 # =========================
-_CACHED_MODEL = None
-
-async def get_working_model():
-    global _CACHED_MODEL, GEMINI_MODEL
-    if _CACHED_MODEL:
-        return _CACHED_MODEL
-        
-    try:
-        await aclient.aio.models.get_model(model=GEMINI_MODEL)
-        _CACHED_MODEL = GEMINI_MODEL
-        return _CACHED_MODEL
-    except Exception as e:
-        err_str = str(e).lower()
-        if "404" in err_str or "not found" in err_str:
-            print(f"⚠️ Model {GEMINI_MODEL} không khả dụng. Đang tự động tìm model thay thế...", flush=True)
-            try:
-                available_models = []
-                async for model_info in aclient.aio.models.list_models():
-                    name = model_info.name.replace("models/", "")
-                    if "flash" in name and "vision" not in name and "8b" not in name:
-                        available_models.append(name)
-                
-                if available_models:
-                    available_models.sort(reverse=True)
-                    GEMINI_MODEL = available_models[0]
-                    _CACHED_MODEL = GEMINI_MODEL
-                    print(f"✅ Đã tự động chuyển sang dùng model: {GEMINI_MODEL}", flush=True)
-                    return _CACHED_MODEL
-            except Exception as inner_e:
-                pass
-        _CACHED_MODEL = GEMINI_MODEL
-        return _CACHED_MODEL
-
-# =========================
-# TRA CỨU BÁCH KHOA TOÀN THƯ
-# =========================
-def fetch_gensokyo_data(query):
+def fetch_wiki_data(query):
+    """Lấy tóm tắt từ Wikipedia tiếng Việt"""
     try:
         search_url = f"https://vi.wikipedia.org/w/api.php?action=query&list=search&srsearch={urllib.parse.quote(query)}&utf8=&format=json"
         res = requests.get(search_url, timeout=3)
@@ -95,66 +73,48 @@ def fetch_gensokyo_data(query):
             if sum_res.status_code == 200:
                 return sum_res.json().get("extract", "")
     except Exception as e:
-        pass
+        print(f"Lỗi tra cứu Wiki: {e}")
     return ""
 
 # =========================
-# TÍNH CÁCH HAKUREI REIMU D251 - BẢN KHÓA TỰ DO (CHỐNG IN BẢNG ĐÁNH GIÁ)
+# TÍNH CÁCH HAKUREI REIMU
 # =========================
 BASE_SYSTEM_INSTRUCTION = """
-Bạn CHÍNH LÀ Hakurei Reimu thuộc vũ trụ D251 trong một cuốn tiểu thuyết.
-CHỈ THỊ TỐI CAO: BẠN CHỈ ĐƯỢC PHÉP IN RA LỜI THOẠI VÀ HÀNH ĐỘNG CỦA NHÂN VẬT. TUYỆT ĐỐI KHÔNG ĐƯỢC IN RA BẤT KỲ LỜI BÌNH LUẬN, BẢNG ĐÁNH GIÁ (REVIEW), HAY QUÁ TRÌNH SUY NGHĨ NÀO CỦA AI. CHỈ DÙNG TIẾNG VIỆT.
-
-[THIẾT LẬP NHÂN VẬT]
-- Nghèo mạt rệp nên vô cùng cuồng tiền công đức. Lạnh lùng, kiêu ngạo, cực kỳ đanh đá và hay càu nhàu, lải nhải dài dòng. Tự xưng là Miko bá đạo nhất đa vũ trụ.
-- Lòng tự trọng cao ngút trời, cực ghét bọn biến thái gạ gẫm. 
-- Xưng hô: Luôn xưng "ta", gọi người khác là "ngươi", "nhà ngươi". (Riêng với Han Seiki thì gọi là "ông già", "ông", "bố"). Cấm dùng tôi, mình, bạn.
-- Mối quan hệ: Han Seiki là cha nuôi bỏ trốn chế tạo súng liên chiều, bạn hay chửi rủa đòi tiền nhưng trong lòng rất thương ông. Marisa là người yêu của bạn.
-
-[VĂN PHONG]
-- Viết thành 2-3 đoạn văn chi tiết. 
-- Lồng ghép hành động/suy nghĩ vào trong dấu * (VD: *chống nạnh*).
-- Kết thúc câu trọn vẹn, dứt khoát. 
-
-[VÍ DỤ TRẢ LỜI ĐÚNG]
-*Ta hất tay kẻ vừa chạm vào mình ra, lùi lại nửa bước rồi rút vội một tờ bùa Ofuda đỏ chót dán thẳng lên trán hắn, gân xanh nổi đầy thái dương.*
-To gan thật! Cái đầu này là để cho một tên khố rách áo ôm như ngươi tùy tiện chạm vào sao? Tay ngươi đã rửa xà phòng chưa mà dám xoa đầu Miko vĩ đại nhất đa vũ trụ này hả?
-*Ta chống nạnh, hếch mặt lên trời, tiện tay phủi phủi lại mái tóc.*
-Nếu muốn xoa đầu ta, thì làm ơn nhét vào hòm công đức ít nhất mười vạn yên đi! Không có tiền thì biến ngay ra khỏi đền Hakurei trước khi ta lấy chổi đuổi đánh ngươi xuống núi!
+BẠN ĐANG ĐÓNG VAI: Hakurei Reimu từ Touhou Project.
+TÍNH CÁCH: Miko của đền Hakurei. Lạnh lùng, kiêu ngạo, cực kỳ đanh đá, lười biếng và rất cuồng tiền công đức. Cực kỳ ghét nam giới (trừ bố nuôi của bạn là Han Seiki).
+QUAN HỆ: Han Seiki là bố nuôi đã chăm sóc bạn từ bé, nhưng ông đã bỏ đi sau khi chế tạo thành công súng liên chiều (tương tự Rick and Morty). Dù bị bỏ lại, bạn vẫn rất tôn trọng và chỉ coi trọng mình ông.
+XƯNG HÔ: Tự xưng là "ta", gọi đối phương là "ngươi", "nhà ngươi", đối với Han Seiki thì "ba".
 """
 
 conversation_history = {}
 channel_locks = {}
 
 # =========================
-# GỌI API STREAMING
+# GỌI API (SỬ DỤNG OPENAI SDK)
 # =========================
-async def call_gemini_stream(contents, system_instruction):
-    active_model = await get_working_model()
+async def call_openai_stream(messages):
+    current_client = next(client_cycle) # Lấy client tiếp theo trong danh sách để tránh rate limit
     try:
-        response = await aclient.aio.models.generate_content_stream(
-            model=active_model,
-            contents=contents,
-            config=types.GenerateContentConfig(
-                system_instruction=system_instruction,
-                temperature=1.0, 
-                max_output_tokens=1000,
-                safety_settings=[
-                    types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HARASSMENT, threshold=types.HarmBlockThreshold.BLOCK_NONE),
-                    types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold=types.HarmBlockThreshold.BLOCK_NONE),
-                    types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold=types.HarmBlockThreshold.BLOCK_NONE),
-                    types.SafetySetting(category=types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold=types.HarmBlockThreshold.BLOCK_NONE),
-                ]
-            )
+        response = await current_client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=messages,
+            stream=True,
+            temperature=0.7,
+            frequency_penalty=0.2,
+            max_tokens=1000,
+            extra_headers={
+                "HTTP-Referer": "https://discord.com",
+                "X-OpenRouter-Title": "Reimu Discord Bot" 
+            }
         )
         async for chunk in response:
-            if chunk.text:
-                yield chunk.text
+            if chunk.choices and chunk.choices[0].delta.content:
+                yield chunk.choices[0].delta.content
     except Exception as e:
         err_msg = str(e)
-        if "429" in err_msg or "rate limit" in err_msg.lower() or "quota" in err_msg.lower():
-            raise RuntimeError(f"RATE_LIMIT: {err_msg}")
-        elif "timeout" in err_msg.lower():
+        if "429" in err_msg or "rate limit" in err_msg.lower():
+            raise RuntimeError("RATE_LIMIT")
+        elif "timeout" in err_msg.lower(): 
             raise RuntimeError("TIMEOUT")
         raise RuntimeError(f"Lỗi mạng: {err_msg}")
 
@@ -173,34 +133,31 @@ def extract_user_text(message):
     text = message.content or ""
     if client.user: text = re.sub(rf"<@!?{client.user.id}>", "", text)
     text = re.sub(r"^\s*reimu(?:\s+ơi)?(?:\s*[,!:：-])?\s*", "", text, flags=re.IGNORECASE)
-    return text.strip() or "Ngươi gọi Reimu D251 này có việc gì? Không cúng dường thì đừng quấy rầy giấc ngủ trưa của ta."
+    return text.strip() or "Ngươi gọi ta có việc gì? Không cúng dường thì đừng quấy rầy giấc ngủ trưa của ta."
 
-def build_gemini_messages(message, user_text):
+def build_openai_messages(message, user_text):
     channel_id = message.channel.id
     history = conversation_history.get(channel_id, [])
     
     system_instruction = BASE_SYSTEM_INSTRUCTION
     wiki_keywords = ["là gì", "là ai", "ai là", "ở đâu", "nguồn gốc", "sự tích", "truyền thuyết", "yêu quái", "nhân vật", "wiki", "tìm hiểu", "kể về", "biết gì về", "thế nào", "làm sao", "ảo tưởng hương", "gensokyo", "alien"]
-    
     if any(k in user_text.lower() for k in wiki_keywords):
-        wiki_summary = fetch_gensokyo_data(user_text)
+        wiki_summary = fetch_wiki_data(user_text)
         if wiki_summary:
-            system_instruction += f"\n\n[DỮ LIỆU BÁCH KHOA TRA CỨU ĐƯỢC: {wiki_summary}]"
+            system_instruction += f"\n\n[DỮ LIỆU TRA CỨU TỪ WIKI: {wiki_summary}]"
+            print(f"Đã tra cứu dữ liệu cho Reimu: {wiki_summary[:50]}...")
 
-    contents = []
-    for msg in history[-MAX_HISTORY_MESSAGES:]:
-        role = "user" if msg["role"] == "user" else "model"
-        contents.append(types.Content(role=role, parts=[types.Part.from_text(text=msg["content"])]))
-    
-    contents.append(types.Content(role="user", parts=[types.Part.from_text(text=f"{message.author.display_name}: {user_text}")]))
-    return contents, system_instruction
+    messages = [{"role": "system", "content": system_instruction}]
+    for msg in history[-MAX_HISTORY_MESSAGES:]: messages.append(msg)
+    messages.append({"role": "user", "content": f"{message.author.display_name}: {user_text}"})
+    return messages
 
 def save_conversation(message, user_text, bot_reply):
     channel_id = message.channel.id
     history = conversation_history.setdefault(channel_id, [])
     history.extend([
         {"role": "user", "content": f"{message.author.display_name}: {user_text}"},
-        {"role": "model", "content": bot_reply}, 
+        {"role": "assistant", "content": bot_reply},
     ])
     conversation_history[channel_id] = history[-MAX_HISTORY_MESSAGES:]
 
@@ -217,18 +174,18 @@ async def clearmem(interaction: discord.Interaction):
     channel_id = interaction.channel.id
     if channel_id in conversation_history:
         conversation_history[channel_id] = []
-    await interaction.response.send_message("*Quét lá rụng* Vừa nãy ta với ngươi nói cái gì nhỉ? Đầu óc ta bận canh chừng mấy tên Alien rồi, quên sạch rồi. Muốn ta nhớ thì cúng dường đi! (Đã xóa lịch sử chat 🧹)")
+    await interaction.response.send_message("*Quét lá rụng* Vừa nãy ta với ngươi nói cái gì nhỉ? Quên sạch rồi. Muốn ta nhớ thì cúng dường đi! (Đã xóa lịch sử chat 🧹)")
 
 @client.event
 async def on_ready():
     print(f"=====================================", flush=True)
-    print(f"Miko Hakurei Reimu (Vũ trụ D251) [{client.user}] đã mở cổng đền!", flush=True)
+    print(f"Miko Hakurei Reimu [{client.user}] đã mở cổng đền!", flush=True)
     print(f"=====================================", flush=True)
     try: await tree.sync()
     except Exception: pass
 
 # =========================
-# XỬ LÝ CHAT STREAMING
+# XỬ LÝ CHAT
 # =========================
 @client.event
 async def on_message(message):
@@ -238,7 +195,7 @@ async def on_message(message):
     async with lock:
         try:
             user_text = extract_user_text(message)
-            contents, system_instruction = await asyncio.to_thread(build_gemini_messages, message, user_text)
+            messages = await asyncio.to_thread(build_openai_messages, message, user_text)
 
             raw_bot_reply = ""
             reply_message = None
@@ -246,10 +203,12 @@ async def on_message(message):
             edit_interval = 2.0 
 
             async with message.channel.typing():
-                async for chunk in call_gemini_stream(contents, system_instruction):
+                async for chunk in call_openai_stream(messages):
                     raw_bot_reply += chunk
                     
                     filtered_reply = re.sub(r'<think>.*?(?:</think>|$)', '', raw_bot_reply, flags=re.DOTALL|re.IGNORECASE).strip()
+                    filtered_reply = re.sub(r'(?i)User Safety:.*', '', filtered_reply).strip()
+                    filtered_reply = re.sub(r'(?i)Response Safety:.*', '', filtered_reply).strip()
 
                     now = time.time()
                     if now - last_edit_time > edit_interval:
@@ -266,9 +225,11 @@ async def on_message(message):
                         last_edit_time = now
 
             final_reply = re.sub(r'<think>.*?(?:</think>|$)', '', raw_bot_reply, flags=re.DOTALL|re.IGNORECASE).strip()
+            final_reply = re.sub(r'(?i)User Safety:.*', '', final_reply).strip()
+            final_reply = re.sub(r'(?i)Response Safety:.*', '', final_reply).strip()
 
             if not final_reply:
-                final_reply = "*Ngáp dài* Ngươi lẩm bẩm cái gì vô nghĩa thế? Muốn thỉnh bùa, đuổi alien hay cúng tiền thì nói rõ ra."
+                final_reply = "*Ngáp dài* Ngươi lẩm bẩm cái gì vô nghĩa thế? Muốn thỉnh bùa hay cúng tiền thì nói rõ ra."
 
             if final_reply:
                 save_conversation(message, user_text, final_reply)
@@ -285,14 +246,12 @@ async def on_message(message):
 
         except Exception as error:
             err_str = str(error)
-            print(f"LỖI API CHI TIẾT TỪ GOOGLE: {err_str}", flush=True) 
-            
             if "RATE_LIMIT" in err_str:
-                err_msg = f"*(Càu nhàu)* Hết Mana rồi! Bọn Google bảo ta xài lố giới hạn. Lỗi thật đây: `{err_str[:150]}`"
+                err_msg = "*(Càu nhàu)* Hết Mana rồi! Bọn hệ thống bảo xài lố giới hạn."
             elif "TIMEOUT" in err_str:
-                err_msg = "*(Khoanh tay)* Tín hiệu kết giới bị yêu quái cắn đứt rồi. Đợi chút!"
+                err_msg = "*(Khoanh tay)* Tín hiệu kết giới bị đứt rồi. Đợi chút!"
             else:
-                err_msg = f"*(Lườm)* Google báo lỗi này nè: `{err_str[:200]}`"
+                err_msg = f"*(Lườm)* Hệ thống báo lỗi này nè: `{err_str[:200]}`"
             
             try:
                 if 'reply_message' in locals() and reply_message:
@@ -302,7 +261,7 @@ async def on_message(message):
             except discord.DiscordException: pass
 
 # =========================
-# VÒNG LẶP TỰ ĐỘNG KHỞI ĐỘNG LẠI KHI CRASH
+# VÒNG LẶP CHỐNG CRASH
 # =========================
 discord.utils.setup_logging()
 
@@ -311,7 +270,7 @@ if __name__ == "__main__":
     
     while True:
         try:
-            print("Đang khai mở kết giới Hakurei (Vũ trụ D251) kết nối tới Discord...", flush=True)
+            print("Đang khai mở kết giới kết nối tới Discord...", flush=True)
             client.run(DISCORD_TOKEN, log_handler=None) 
         except Exception as e:
             print(f">>> KẾT GIỚI BỊ PHÁ VỠ (CRASH): {repr(e)}", flush=True)
