@@ -154,7 +154,7 @@ async def call_gemini_stream(contents, system_instruction):
     except Exception as e:
         err_msg = str(e)
         if "429" in err_msg or "rate limit" in err_msg.lower() or "quota" in err_msg.lower():
-            raise RuntimeError("RATE_LIMIT")
+            raise RuntimeError(f"RATE_LIMIT: {err_msg}")
         elif "timeout" in err_msg.lower():
             raise RuntimeError("TIMEOUT")
         raise RuntimeError(f"Lỗi mạng: {err_msg}")
@@ -286,13 +286,14 @@ async def on_message(message):
 
         except Exception as error:
             err_str = str(error)
+            print(f"LỖI API CHI TIẾT TỪ GOOGLE: {err_str}", flush=True) 
+            
             if "RATE_LIMIT" in err_str:
-                err_msg = "*(Càu nhàu)* Mấy tên thần linh nay làm ăn tắc trách quá, sóng pháp thuật bị nghẽn rồi. Đợi ta một chút!"
+                err_msg = f"*(Càu nhàu)* Hết Mana rồi! Bọn Google bảo ta xài lố giới hạn. Lỗi thật đây: `{err_str[:150]}`"
             elif "TIMEOUT" in err_str:
-                err_msg = "*(Khoanh tay, thở dài)* Tín hiệu kết giới bị yêu quái hoặc alien cắn đứt rồi. Lát nữa hẵng gọi lại cho ta!"
+                err_msg = "*(Khoanh tay)* Tín hiệu kết giới bị yêu quái cắn đứt rồi. Đợi chút!"
             else:
-                err_msg = f"*(Lườm sát khí)* Kết giới D251 xảy ra dị thường rồi! Ta đang thử dùng bùa chú loại khác, ngươi chờ một chút hoặc gọi lại sau nhé."
-                print(f"Lỗi API: {err_str}", flush=True) 
+                err_msg = f"*(Lườm)* Google báo lỗi này nè: `{err_str[:200]}`"
             
             try:
                 if 'reply_message' in locals() and reply_message:
