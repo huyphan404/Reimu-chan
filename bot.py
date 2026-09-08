@@ -36,8 +36,8 @@ def keep_alive():
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 # Tự động nhận GEMINI_API_KEY (hoặc lấy tạm OPENAI_API_KEY nếu bạn chưa kịp đổi tên biến)
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("OPENAI_API_KEY")
-# Sử dụng model gemini-2.5-flash (rất nhanh, thông minh và giá cực rẻ/miễn phí)
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip()
+# Lấy model từ biến môi trường, mặc định là gemini-1.5-flash vì nó là bản ổn định rộng rãi nhất
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash").strip()
 
 MAX_HISTORY_MESSAGES = 8
 try: CHAT_CHANNEL_ID = int(os.getenv("CHAT_CHANNEL_ID", "0") or "0")
@@ -45,6 +45,39 @@ except ValueError: CHAT_CHANNEL_ID = 0
 
 # KHỞI TẠO CLIENT GOOGLE GEMINI SDK
 aclient = genai.Client(api_key=GEMINI_API_KEY)
+
+# =========================
+# CƠ CHẾ AUTO-FALLBACK TÌM MODEL SỐNG
+# =========================
+async def get_working_model():
+    """Kiểm tra xem model cấu hình có chạy được không. Nếu không, tự tìm model flash mới nhất đang mở."""
+    global GEMINI_MODEL
+    try:
+        # Thử lấy thông tin của Model hiện tại xem có bị 404 không
+        await aclient.aio.models.get_model(model=GEMINI_MODEL)
+        return GEMINI_MODEL
+    except Exception as e:
+        err_str = str(e).lower()
+        if "404" in err_str or "not found" in err_str:
+            print(f"⚠️ Model {GEMINI_MODEL} không khả dụng. Đang tự động tìm model thay thế...", flush=True)
+            try:
+                # Lấy danh sách TẤT CẢ các model tài khoản bạn đang được phép dùng
+                available_models = []
+                async for model_info in aclient.aio.models.list_models():
+                    name = model_info.name.replace("models/", "")
+                    if "flash" in name and "vision" not in name and "8b" not in name:
+                        available_models.append(name)
+                
+                if available_models:
+                    # Sắp xếp để ưu tiên các model số to (mới nhất)
+                    available_models.sort(reverse=True)
+                    GEMINI_MODEL = available_models[0]
+                    print(f"✅ Đã tự động chuyển sang dùng model: {GEMINI_MODEL}", flush=True)
+                    return GEMINI_MODEL
+            except Exception as inner_e:
+                print(f"Lỗi khi tìm model thay thế: {inner_e}")
+        # Nếu không phải 404 (ví dụ 503) thì cứ trả về model cũ để xử lý quá tải
+        return GEMINI_MODEL
 
 # =========================
 # TRA CỨU BÁCH KHOA TOÀN THƯ (WIKIPEDIA / GENSOKYO)
@@ -99,9 +132,11 @@ channel_locks = {}
 # GỌI API STREAMING (GEMINI SDK)
 # =========================
 async def call_gemini_stream(contents, system_instruction):
+    # Đảm bảo có model sống trước khi gọi API
+    active_model = await get_working_model()
     try:
         response = await aclient.aio.models.generate_content_stream(
-            model=GEMINI_MODEL,
+            model=active_model,
             contents=contents,
             config=types.GenerateContentConfig(
                 system_instruction=system_instruction,
@@ -254,7 +289,9 @@ async def on_message(message):
             elif "TIMEOUT" in err_str:
                 err_msg = "*(Khoanh tay, thở dài)* Tín hiệu kết giới bị yêu quái hoặc alien cắn đứt rồi. Lát nữa hẵng gọi lại cho ta!"
             else:
-                err_msg = f"*(Lườm sát khí)* Kết giới D251 xảy ra dị thường rồi: `{err_str[:200]}`"
+                # Ẩn bớt cái lỗi dài ngoằng đi, chỉ hiện cảnh báo sập kết giới ngắn gọn thôi
+                err_msg = f"*(Lườm sát khí)* Kết giới D251 xảy ra dị thường rồi! Ta đang thử dùng bùa chú loại khác, ngươi chờ một chút hoặc gọi lại sau nhé."
+                print(f"Lỗi API: {err_str}", flush=True) # In lỗi ra console (Log) thay vì quăng vào mặt người dùng
             
             try:
                 if 'reply_message' in locals() and reply_message:
