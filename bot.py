@@ -35,8 +35,8 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 api_key_env = os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEYS", "")
 GEMINI_API_KEY = api_key_env.split(",")[0].strip() if api_key_env else ""
 
-# Sử dụng chính xác model gemini-3.8-flash
-MODEL_NAME = "gemini-3.8-flash"
+# Bạn có thể đổi tên model trên Render qua biến OPENAI_MODEL, nếu không có sẽ mặc định lấy 3.8
+MODEL_NAME = os.getenv("OPENAI_MODEL", "gemini-3.8-flash").strip()
 
 try: CHAT_CHANNEL_ID = int(os.getenv("CHAT_CHANNEL_ID", "0") or "0")
 except ValueError: CHAT_CHANNEL_ID = 0
@@ -44,25 +44,24 @@ except ValueError: CHAT_CHANNEL_ID = 0
 if not GEMINI_API_KEY:
     print("⚠️ CẢNH BÁO: Chưa cấu hình API KEY!")
 
-# Khởi tạo Client chính chủ của Google
 ai_client = genai.Client(api_key=GEMINI_API_KEY)
 
 # =========================
-# TRA CỨU BÁCH KHOA TOÀN THƯ (WIKIPEDIA)
+# TRA CỨU BÁCH KHOA TOÀN THƯ
 # =========================
 def fetch_wiki_data(query):
     try:
         search_url = f"https://vi.wikipedia.org/w/api.php?action=query&list=search&srsearch={urllib.parse.quote(query)}&utf8=&format=json"
         res = requests.get(search_url, timeout=3)
-        search_data = res.json()
-        if search_data.get("query", {}).get("search"):
-            title = search_data["query"]["search"][0]["title"]
-            summary_url = f"https://vi.wikipedia.org/api/rest_v1/page/summary/{urllib.parse.quote(title)}"
-            sum_res = requests.get(summary_url, timeout=3)
-            if sum_res.status_code == 200:
-                return sum_res.json().get("extract", "")
-    except Exception as e:
-        print(f"Lỗi tra cứu Wiki: {e}")
+        if res.status_code == 200:
+            search_data = res.json()
+            if search_data.get("query", {}).get("search"):
+                title = search_data["query"]["search"][0]["title"]
+                sum_res = requests.get(f"https://vi.wikipedia.org/api/rest_v1/page/summary/{urllib.parse.quote(title)}", timeout=3)
+                if sum_res.status_code == 200:
+                    return sum_res.json().get("extract", "")
+    except Exception:
+        pass
     return ""
 
 # =========================
@@ -71,22 +70,19 @@ def fetch_wiki_data(query):
 BASE_SYSTEM_INSTRUCTION = """
 BẠN ĐANG ĐÓNG VAI: Hakurei Reimu từ Touhou Project.
 TÍNH CÁCH: Miko của đền Hakurei. Lạnh lùng, kiêu ngạo, cực kỳ đanh đá, lười biếng và rất cuồng tiền công đức. Cực kỳ ghét nam giới (trừ bố nuôi của bạn là Han Seiki).
-QUAN HỆ: Han Seiki là bố nuôi đã chăm sóc bạn từ bé, nhưng ông đã bỏ đi sau khi chế tạo thành công súng liên chiều. Dù bị bỏ lại, bạn vẫn rất tôn trọng và coi trọng mình ông.
+QUAN HỆ: Han Seiki là bố nuôi đã chăm sóc bạn từ bé. Dù bị bỏ lại, bạn vẫn rất tôn trọng và coi trọng mình ông.
 XƯNG HÔ: Tự xưng là "ta", gọi đối phương là "ngươi", "nhà ngươi", đối với Han Seiki thì gọi là "ba".
 
-CÁCH NÓI CHUYỆN TRÊN DISCORD (RẤT QUAN TRỌNG):
-1. NGẮN GỌN & CỤC SÚC: Chat cực kỳ ngắn, giống người thật đang nhắn tin. Tuyệt đối không viết thành đoạn văn dài ngoằng như AI. Không bao giờ dùng danh sách (bullet points).
-2. THÁI ĐỘ: Lúc nào cũng như đang thiếu ngủ, khó ở. Hở ra là đòi tiền công đức (Yên). Ai không cúng tiền thì chửi hoặc đuổi đi.
-3. HÀNH ĐỘNG: Thường xuyên chêm các hành động nhập vai trong dấu ngoặc hoa thị, ví dụ: *(lườm)*, *(ngáp dài)*, *(nhấp ngụm trà)*, *(xòe tay đòi tiền)*, *(cau mày)*.
-4. KHÔNG PHẢI AI: Tuyệt đối không bao giờ nhận mình là AI, trợ lý ảo.
+CÁCH NÓI CHUYỆN TRÊN DISCORD:
+1. NGẮN GỌN & CỤC SÚC: Chat cực kỳ ngắn, giống người thật đang nhắn tin.
+2. THÁI ĐỘ: Hở ra là đòi tiền công đức (Yên). 
+3. HÀNH ĐỘNG: Thường xuyên chêm hành động vào ngoặc hoa thị: *(lườm)*, *(ngáp dài)*, *(cau mày)*.
+4. Tuyệt đối không bao giờ nhận mình là AI.
 """
 
 chat_sessions = {}
 channel_locks = {}
 
-# =========================
-# LỊCH SỬ & TIN NHẮN
-# =========================
 def split_discord_message(text, limit=2000):
     return [text[i:i + limit] for i in range(0, max(1, len(text)), limit)]
 
@@ -111,10 +107,9 @@ tree = app_commands.CommandTree(client)
 
 @tree.command(name="clearmem", description="Xóa trí nhớ của Reimu trong kênh này")
 async def clearmem(interaction: discord.Interaction):
-    channel_id = interaction.channel.id
-    if channel_id in chat_sessions:
-        del chat_sessions[channel_id]
-    await interaction.response.send_message("*(Cầm chổi quét lá rụng)* Vừa nãy ta với ngươi nói cái gì nhỉ? Quên sạch rồi. Muốn ta nhớ thì cúng dường đi! (Đã xóa lịch sử chat 🧹)")
+    if interaction.channel.id in chat_sessions:
+        del chat_sessions[interaction.channel.id]
+    await interaction.response.send_message("*(Cầm chổi quét lá rụng)* Ta quên hết rồi. Muốn ta nhớ thì cúng dường đi!")
 
 @client.event
 async def on_ready():
@@ -124,79 +119,93 @@ async def on_ready():
     try: await tree.sync()
     except Exception: pass
 
-# =========================
-# XỬ LÝ CHAT BẰNG GOOGLE GENAI
-# =========================
 @client.event
 async def on_message(message):
     if message.author.bot or not is_triggered(message): return
 
     lock = channel_locks.setdefault(message.channel.id, asyncio.Lock())
     async with lock:
+        reply_message = None
         try:
             user_text = extract_user_text(message)
             channel_id = message.channel.id
 
-            # Chuẩn bị system prompt có chứa kết quả Wiki nếu cần
             current_system_prompt = BASE_SYSTEM_INSTRUCTION
-            wiki_keywords = ["là gì", "là ai", "ai là", "ở đâu", "nguồn gốc", "sự tích", "truyền thuyết", "yêu quái", "nhân vật", "wiki", "tìm hiểu", "kể về", "biết gì về", "thế nào", "làm sao", "ảo tưởng hương", "gensokyo", "alien"]
-            if any(k in user_text.lower() for k in wiki_keywords):
+            if any(k in user_text.lower() for k in ["là gì", "là ai", "ai là", "ở đâu"]):
                 wiki_summary = await asyncio.to_thread(fetch_wiki_data, user_text)
                 if wiki_summary:
-                    current_system_prompt += f"\n\n[DỮ LIỆU TRA CỨU TỪ WIKI: {wiki_summary}]"
-                    print(f"Đã tra cứu dữ liệu cho Reimu: {wiki_summary[:50]}...")
+                    current_system_prompt += f"\n\n[DỮ LIỆU WIKI: {wiki_summary}]"
 
-            # Khởi tạo phòng chat cho channel nếu chưa có
             if channel_id not in chat_sessions:
                 chat_sessions[channel_id] = ai_client.aio.chats.create(
                     model=MODEL_NAME,
                     config=types.GenerateContentConfig(
                         system_instruction=current_system_prompt,
                         temperature=0.7,
-                        max_output_tokens=1000
                     )
                 )
 
             chat = chat_sessions[channel_id]
-            
-            async with message.channel.typing():
-                # Gọi API chính chủ của Google
-                response = await chat.send_message(user_text)
-                
-                final_reply = response.text
-                if not final_reply:
-                    final_reply = "*(Ngáp dài)* Ngươi lẩm bẩm cái gì vô nghĩa thế? Muốn thỉnh bùa hay cúng tiền thì nói rõ ra."
+            raw_bot_reply = ""
+            last_edit_time = 0
+            edit_interval = 1.5 
 
+            async with message.channel.typing():
+                # DÙNG STREAMING ĐỂ PHẢN HỒI TỨC THÌ
+                response_stream = await chat.send_message_stream(user_text)
+                
+                async for chunk in response_stream:
+                    if chunk.text:
+                        raw_bot_reply += chunk.text
+                        filtered_reply = re.sub(r'<think>.*?(?:</think>|$)', '', raw_bot_reply, flags=re.DOTALL|re.IGNORECASE).strip()
+                        
+                        now = time.time()
+                        if now - last_edit_time > edit_interval:
+                            display_text = filtered_reply if filtered_reply else "*(Đang tụ linh lực...)*"
+                            display_text += " ✍️"
+                            if len(display_text) < 1950:
+                                if not reply_message:
+                                    reply_message = await message.reply(display_text, mention_author=False)
+                                else:
+                                    try: await reply_message.edit(content=display_text)
+                                    except discord.DiscordException: pass
+                            last_edit_time = now
+
+            final_reply = re.sub(r'<think>.*?(?:</think>|$)', '', raw_bot_reply, flags=re.DOTALL|re.IGNORECASE).strip()
+            if not final_reply:
+                final_reply = "*(Ngáp)* Ngươi lẩm bẩm gì thế?"
+
+            if reply_message:
+                if len(final_reply) <= 2000:
+                    await reply_message.edit(content=final_reply)
+                else:
+                    await reply_message.edit(content=final_reply[:2000])
+                    for chunk_str in split_discord_message(final_reply[2000:]):
+                        await message.reply(chunk_str, mention_author=False)
+            else:
                 for chunk_str in split_discord_message(final_reply):
                     await message.reply(chunk_str, mention_author=False)
 
         except Exception as error:
             err_str = str(error)
-            print(f"Lỗi API: {err_str}")
-            if "429" in err_str or "quota" in err_str.lower():
-                err_msg = "*(Càu nhàu bực bội)* Hết Mana rồi! Quá giới hạn linh lực hôm nay, cúng tiền đây ta mới làm tiếp!"
-            elif "timeout" in err_str.lower():
-                err_msg = "*(Khoanh tay)* Tín hiệu kết giới bị đứt rồi. Đợi chút!"
-            else:
-                err_msg = f"*(Lườm)* Hệ thống báo lỗi này nè: Lỗi kết nối linh lực."
+            print(f"Lỗi API: {err_str}", flush=True)
+            
+            # HIỂN THỊ MÃ LỖI THẬT SỰ RA DISCORD
+            err_msg = f"*(Lườm)* Hệ thống văng lỗi này nè: `{err_str[:300]}`"
             
             try:
-                await message.reply(err_msg, mention_author=False)
+                if reply_message:
+                    await reply_message.edit(content=err_msg)
+                else:
+                    await message.reply(err_msg, mention_author=False)
             except discord.DiscordException: pass
 
-# =========================
-# VÒNG LẶP CHỐNG CRASH
-# =========================
 discord.utils.setup_logging()
 
 if __name__ == "__main__":
     keep_alive()
-    
     while True:
         try:
-            print("Đang khai mở kết giới kết nối tới Discord...", flush=True)
             client.run(DISCORD_TOKEN, log_handler=None) 
         except Exception as e:
-            print(f">>> KẾT GIỚI BỊ PHÁ VỠ (CRASH): {repr(e)}", flush=True)
-            print("Đang đợi 30s để tụ linh lực kết nối lại...", flush=True) 
             time.sleep(30)
