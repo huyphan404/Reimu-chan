@@ -34,8 +34,6 @@ def keep_alive():
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 api_key_env = os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEYS", "")
 GEMINI_API_KEY = api_key_env.split(",")[0].strip() if api_key_env else ""
-
-# Bạn có thể đổi tên model trên Render qua biến OPENAI_MODEL, nếu không có sẽ mặc định lấy 3.8
 MODEL_NAME = os.getenv("OPENAI_MODEL", "gemini-3.8-flash").strip()
 
 try: CHAT_CHANNEL_ID = int(os.getenv("CHAT_CHANNEL_ID", "0") or "0")
@@ -74,7 +72,7 @@ QUAN HỆ: Han Seiki là bố nuôi đã chăm sóc bạn từ bé. Dù bị b�
 XƯNG HÔ: Tự xưng là "ta", gọi đối phương là "ngươi", "nhà ngươi", đối với Han Seiki thì gọi là "ba".
 
 CÁCH NÓI CHUYỆN TRÊN DISCORD:
-1. NGẮN GỌN & CỤC SÚC: Chat cực kỳ ngắn, giống người thật đang nhắn tin.
+1. NGẮN GỌN & CỤC SÚC: Chat cực kỳ ngắn, giống người thật đang nhắn tin. Tuyệt đối KHÔNG viết một đoạn văn dài dòng.
 2. THÁI ĐỘ: Hở ra là đòi tiền công đức (Yên). 
 3. HÀNH ĐỘNG: Thường xuyên chêm hành động vào ngoặc hoa thị: *(lườm)*, *(ngáp dài)*, *(cau mày)*.
 4. Tuyệt đối không bao giờ nhận mình là AI.
@@ -125,7 +123,6 @@ async def on_message(message):
 
     lock = channel_locks.setdefault(message.channel.id, asyncio.Lock())
     async with lock:
-        reply_message = None
         try:
             user_text = extract_user_text(message)
             channel_id = message.channel.id
@@ -146,58 +143,28 @@ async def on_message(message):
                 )
 
             chat = chat_sessions[channel_id]
-            raw_bot_reply = ""
-            last_edit_time = 0
-            edit_interval = 1.5 
 
+            # HIỂN THỊ CHỮ "Reimu đang nhập..." TRÊN DISCORD
             async with message.channel.typing():
-                # DÙNG STREAMING ĐỂ PHẢN HỒI TỨC THÌ
-                response_stream = await chat.send_message_stream(user_text)
+                # GỬI ĐÚNG 1 CỤC TỐC ĐỘ BÀN THỜ NHƯ ALICE
+                response = await chat.send_message(user_text)
                 
-                async for chunk in response_stream:
-                    if chunk.text:
-                        raw_bot_reply += chunk.text
-                        filtered_reply = re.sub(r'<think>.*?(?:</think>|$)', '', raw_bot_reply, flags=re.DOTALL|re.IGNORECASE).strip()
-                        
-                        now = time.time()
-                        if now - last_edit_time > edit_interval:
-                            display_text = filtered_reply if filtered_reply else "*(Đang tụ linh lực...)*"
-                            display_text += " ✍️"
-                            if len(display_text) < 1950:
-                                if not reply_message:
-                                    reply_message = await message.reply(display_text, mention_author=False)
-                                else:
-                                    try: await reply_message.edit(content=display_text)
-                                    except discord.DiscordException: pass
-                            last_edit_time = now
+                final_reply = response.text
+                if final_reply:
+                    final_reply = re.sub(r'<think>.*?(?:</think>|$)', '', final_reply, flags=re.DOTALL|re.IGNORECASE).strip()
 
-            final_reply = re.sub(r'<think>.*?(?:</think>|$)', '', raw_bot_reply, flags=re.DOTALL|re.IGNORECASE).strip()
-            if not final_reply:
-                final_reply = "*(Ngáp)* Ngươi lẩm bẩm gì thế?"
+                if not final_reply:
+                    final_reply = "*(Ngáp)* Ngươi lẩm bẩm gì thế?"
 
-            if reply_message:
-                if len(final_reply) <= 2000:
-                    await reply_message.edit(content=final_reply)
-                else:
-                    await reply_message.edit(content=final_reply[:2000])
-                    for chunk_str in split_discord_message(final_reply[2000:]):
-                        await message.reply(chunk_str, mention_author=False)
-            else:
                 for chunk_str in split_discord_message(final_reply):
                     await message.reply(chunk_str, mention_author=False)
 
         except Exception as error:
             err_str = str(error)
             print(f"Lỗi API: {err_str}", flush=True)
-            
-            # HIỂN THỊ MÃ LỖI THẬT SỰ RA DISCORD
-            err_msg = f"*(Lườm)* Hệ thống văng lỗi này nè: `{err_str[:300]}`"
-            
+            err_msg = f"*(Lườm)* Lỗi hệ thống: `{err_str[:300]}`"
             try:
-                if reply_message:
-                    await reply_message.edit(content=err_msg)
-                else:
-                    await message.reply(err_msg, mention_author=False)
+                await message.reply(err_msg, mention_author=False)
             except discord.DiscordException: pass
 
 discord.utils.setup_logging()
