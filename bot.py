@@ -28,34 +28,30 @@ def keep_alive():
     Thread(target=run_health_server, daemon=True, name="health-server").start()
 
 # =========================
-# CẤU HÌNH API
+# CẤU HÌNH API GEMINI (1 KEY DUY NHẤT)
 # =========================
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-# Hỗ trợ nhiều key cách nhau bằng dấu phẩy
-api_keys_env = os.getenv("OPENAI_API_KEYS") or os.getenv("OPENAI_API_KEY", "")
-API_KEYS = [k.strip() for k in api_keys_env.split(",") if k.strip()]
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "minimax/minimax-m3:free").strip()
-OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://openrouter.ai/api/v1").strip().rstrip('/')
+
+# Lấy 1 key duy nhất (Hỗ trợ cả tên biến cũ OPENAI_API_KEYS để bạn không phải sửa trên Render)
+api_key_env = os.getenv("OPENAI_API_KEY") or os.getenv("OPENAI_API_KEYS", "")
+OPENAI_API_KEY = api_key_env.split(",")[0].strip() if api_key_env else "dummy_key"
+
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gemini-2.0-flash").strip()
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai/").strip().rstrip('/')
 
 MAX_HISTORY_MESSAGES = 8
 try: CHAT_CHANNEL_ID = int(os.getenv("CHAT_CHANNEL_ID", "0") or "0")
 except ValueError: CHAT_CHANNEL_ID = 0
 
-import itertools
+if OPENAI_API_KEY == "dummy_key":
+    print("⚠️ CẢNH BÁO: Chưa cấu hình OPENAI_API_KEY!")
 
-# KHỞI TẠO DANH SÁCH CLIENT OPENAI ĐỂ LUÂN PHIÊN (ROUND-ROBIN)
-if not API_KEYS:
-    print("⚠️ CẢNH BÁO: Chưa cấu hình OPENAI_API_KEYS hoặc OPENAI_API_KEY!")
-    API_KEYS = ["dummy_key"]
-
-clients = [
-    AsyncOpenAI(
-        base_url=OPENAI_BASE_URL,
-        api_key=key,
-        timeout=30.0 
-    ) for key in API_KEYS
-]
-client_cycle = itertools.cycle(clients)
+# Khởi tạo Client OpenAI gọi sang Google
+openai_client = AsyncOpenAI(
+    base_url=OPENAI_BASE_URL,
+    api_key=OPENAI_API_KEY,
+    timeout=30.0 
+)
 
 # =========================
 # TRA CỨU BÁCH KHOA TOÀN THƯ (WIKIPEDIA)
@@ -82,25 +78,35 @@ def fetch_wiki_data(query):
 BASE_SYSTEM_INSTRUCTION = """
 BẠN ĐANG ĐÓNG VAI: Hakurei Reimu từ Touhou Project.
 TÍNH CÁCH: Miko của đền Hakurei. Lạnh lùng, kiêu ngạo, cực kỳ đanh đá, lười biếng và rất cuồng tiền công đức. Cực kỳ ghét nam giới (trừ bố nuôi của bạn là Han Seiki).
-QUAN HỆ: Han Seiki là bố nuôi đã chăm sóc bạn từ bé, nhưng ông đã bỏ đi sau khi chế tạo thành công súng liên chiều (tương tự Rick and Morty). Dù bị bỏ lại, bạn vẫn rất tôn trọng và chỉ coi trọng mình ông.
-XƯNG HÔ: Tự xưng là "ta", gọi đối phương là "ngươi", "nhà ngươi", đối với Han Seiki thì "ba".
+QUAN HỆ: Han Seiki là bố nuôi đã chăm sóc bạn từ bé, nhưng ông đã bỏ đi sau khi chế tạo thành công súng liên chiều. Dù bị bỏ lại, bạn vẫn rất tôn trọng và coi trọng mình ông.
+XƯNG HÔ: Tự xưng là "ta", gọi đối phương là "ngươi", "nhà ngươi", đối với Han Seiki thì gọi là "ba".
+
+CÁCH NÓI CHUYỆN TRÊN DISCORD (RẤT QUAN TRỌNG):
+1. NGẮN GỌN & CỤC SÚC: Chat cực kỳ ngắn, giống người thật đang nhắn tin. Tuyệt đối không viết thành đoạn văn dài ngoằng như AI. Không bao giờ dùng danh sách (bullet points).
+2. THÁI ĐỘ: Lúc nào cũng như đang thiếu ngủ, khó ở. Hở ra là đòi tiền công đức (Yên). Ai không cúng tiền thì chửi hoặc đuổi đi.
+3. HÀNH ĐỘNG: Thường xuyên chêm các hành động nhập vai trong dấu ngoặc hoa thị, ví dụ: *(lườm)*, *(ngáp dài)*, *(nhấp ngụm trà)*, *(xòe tay đòi tiền)*, *(cau mày)*.
+4. KHÔNG PHẢI AI: Tuyệt đối không bao giờ nhận mình là AI, trợ lý ảo, hay dùng từ ngữ như "Tôi có thể giúp gì", "Xin lỗi vì sự bất tiện".
+
+VÍ DỤ CÁCH TRẢ LỜI:
+User: Chào Reimu!
+Reimu: *(Ngáp)* Gì đấy? Ồn ào quá... Có mang tiền công đức tới không thì bảo?
+User: Kể chuyện ma đi.
+Reimu: *(Lườm)* Ta là vu nữ diệt yêu quái, không phải người kể chuyện mua vui. 10 vạn Yên thì ta kể, không thì biến!
 """
 
 conversation_history = {}
 channel_locks = {}
 
 # =========================
-# GỌI API (SỬ DỤNG OPENAI SDK)
+# GỌI API
 # =========================
 async def call_openai_stream(messages):
-    current_client = next(client_cycle) # Lấy client tiếp theo trong danh sách để tránh rate limit
     try:
-        response = await current_client.chat.completions.create(
+        response = await openai_client.chat.completions.create(
             model=OPENAI_MODEL,
             messages=messages,
             stream=True,
             temperature=0.7,
-            frequency_penalty=0.2,
             max_tokens=1000,
             extra_headers={
                 "HTTP-Referer": "https://discord.com",
@@ -112,7 +118,7 @@ async def call_openai_stream(messages):
                 yield chunk.choices[0].delta.content
     except Exception as e:
         err_msg = str(e)
-        if "429" in err_msg or "rate limit" in err_msg.lower():
+        if "429" in err_msg or "rate limit" in err_msg.lower() or "quota" in err_msg.lower():
             raise RuntimeError("RATE_LIMIT")
         elif "timeout" in err_msg.lower(): 
             raise RuntimeError("TIMEOUT")
@@ -133,7 +139,7 @@ def extract_user_text(message):
     text = message.content or ""
     if client.user: text = re.sub(rf"<@!?{client.user.id}>", "", text)
     text = re.sub(r"^\s*reimu(?:\s+ơi)?(?:\s*[,!:：-])?\s*", "", text, flags=re.IGNORECASE)
-    return text.strip() or "Ngươi gọi ta có việc gì? Không cúng dường thì đừng quấy rầy giấc ngủ trưa của ta."
+    return text.strip() or "*(Nheo mắt)* Ngươi gọi ta có việc gì? Không cúng dường thì đừng quấy rầy giấc ngủ trưa của ta."
 
 def build_openai_messages(message, user_text):
     channel_id = message.channel.id
@@ -174,7 +180,7 @@ async def clearmem(interaction: discord.Interaction):
     channel_id = interaction.channel.id
     if channel_id in conversation_history:
         conversation_history[channel_id] = []
-    await interaction.response.send_message("*Quét lá rụng* Vừa nãy ta với ngươi nói cái gì nhỉ? Quên sạch rồi. Muốn ta nhớ thì cúng dường đi! (Đã xóa lịch sử chat 🧹)")
+    await interaction.response.send_message("*(Cầm chổi quét lá rụng)* Vừa nãy ta với ngươi nói cái gì nhỉ? Quên sạch rồi. Muốn ta nhớ thì cúng dường đi! (Đã xóa lịch sử chat 🧹)")
 
 @client.event
 async def on_ready():
@@ -200,21 +206,19 @@ async def on_message(message):
             raw_bot_reply = ""
             reply_message = None
             last_edit_time = 0
-            edit_interval = 2.0 
+            edit_interval = 1.5 
 
             async with message.channel.typing():
                 async for chunk in call_openai_stream(messages):
                     raw_bot_reply += chunk
                     
                     filtered_reply = re.sub(r'<think>.*?(?:</think>|$)', '', raw_bot_reply, flags=re.DOTALL|re.IGNORECASE).strip()
-                    filtered_reply = re.sub(r'(?i)User Safety:.*', '', filtered_reply).strip()
-                    filtered_reply = re.sub(r'(?i)Response Safety:.*', '', filtered_reply).strip()
 
                     now = time.time()
                     if now - last_edit_time > edit_interval:
                         display_text = filtered_reply
                         if not display_text:
-                            display_text = "*(Đang chuẩn bị bùa chú...)*"
+                            display_text = "*(Đang lục tìm bùa chú...)*"
                         display_text += " ✍️"
                         if len(display_text) < 1950:
                             if not reply_message:
@@ -225,11 +229,9 @@ async def on_message(message):
                         last_edit_time = now
 
             final_reply = re.sub(r'<think>.*?(?:</think>|$)', '', raw_bot_reply, flags=re.DOTALL|re.IGNORECASE).strip()
-            final_reply = re.sub(r'(?i)User Safety:.*', '', final_reply).strip()
-            final_reply = re.sub(r'(?i)Response Safety:.*', '', final_reply).strip()
 
             if not final_reply:
-                final_reply = "*Ngáp dài* Ngươi lẩm bẩm cái gì vô nghĩa thế? Muốn thỉnh bùa hay cúng tiền thì nói rõ ra."
+                final_reply = "*(Ngáp dài)* Ngươi lẩm bẩm cái gì vô nghĩa thế? Muốn thỉnh bùa hay cúng tiền thì nói rõ ra."
 
             if final_reply:
                 save_conversation(message, user_text, final_reply)
@@ -247,7 +249,7 @@ async def on_message(message):
         except Exception as error:
             err_str = str(error)
             if "RATE_LIMIT" in err_str:
-                err_msg = "*(Càu nhàu)* Hết Mana rồi! Bọn hệ thống bảo xài lố giới hạn."
+                err_msg = "*(Càu nhàu bực bội)* Hết Mana rồi! Quá giới hạn linh lực hôm nay, cúng tiền đây ta mới làm tiếp!"
             elif "TIMEOUT" in err_str:
                 err_msg = "*(Khoanh tay)* Tín hiệu kết giới bị đứt rồi. Đợi chút!"
             else:
